@@ -1,0 +1,40 @@
+{
+  "name": "cursor-math-proofs-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:electron": "wait-on --timeout 10000 tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .",
+    "build": "vite build",
+    "lint": "eslint . --ext .ts,.tsx",
+    "start": "electron ."
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-router-dom": "^6.26.2",
+    "katex": "^0.16.9"
+  },
+  "devDependencies": {
+    "@types/node": "20.11.24",
+    "@types/react": "18.2.57",
+    "@types/react-dom": "18.2.18",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "10.4.17",
+    "concurrently": "8.2.2",
+    "cross-env": "7.0.3",
+    "electron": "33.2.0",
+    "eslint": "8.57.0",
+    "eslint-plugin-react": "7.34.1",
+    "postcss": "8.4.35",
+    "tailwindcss": "3.4.1",
+    "typescript": "5.3.3",
+    "vite": "5.1.6",
+    "wait-on": "7.2.0",
+    "@typescript-eslint/eslint-plugin": "7.3.1",
+    "@typescript-eslint/parser": "7.3.1"
+  }
+}
