@@ -3,10 +3,17 @@ const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const { StorageService } = require('./backend/storage');
 const { draftProofResponse, chatResponse } = require('./backend/llm');
 const { buildLatexBundle } = require('./backend/latex');
+const { CONFIG_FILENAME, ensureConfig, readConfig, writeConfig } = require('./backend/config');
 
 const isDev = !!process.env.VITE_DEV_SERVER_URL;
 let mainWindow;
 let storage;
+let configPath;
+let isQuitting = false;
+
+function getSampleStorageRoot() {
+  return path.join(app.getAppPath(), 'storage');
+}
 
 function getStorageRoot() {
   const customRoot = process.env.PROJECT_STORAGE_DIR;
@@ -18,7 +25,7 @@ function getStorageRoot() {
 
 async function ensureStorage() {
   if (!storage) {
-    storage = new StorageService(getStorageRoot());
+    storage = new StorageService(getStorageRoot(), [getSampleStorageRoot()]);
     await storage.init();
   }
   return storage;
@@ -30,6 +37,7 @@ function createWindow() {
     height: 900,
     backgroundColor: '#020617',
     autoHideMenuBar: true,
+    title: 'Cursor for Math Proofs',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -57,6 +65,20 @@ function createWindow() {
   mainWindow.setMenuBarVisibility(false);
   mainWindow.setBackgroundColor('#020617');
 
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.webContents.send('app:request-close');
+    } else {
+      isQuitting = false;
+    }
+  });
+
+  mainWindow.on('closed', () => {
+    mainWindow = null;
+    isQuitting = false;
+  });
+
   if (isDev) {
     const devServerUrl = process.env.VITE_DEV_SERVER_URL;
     mainWindow.loadURL(devServerUrl);
@@ -75,6 +97,8 @@ function serializeError(message, code) {
 
 app.whenReady().then(async () => {
   await ensureStorage();
+  configPath = path.join(app.getPath('userData'), CONFIG_FILENAME);
+  await ensureConfig(configPath);
   createWindow();
   setupMenu();
 
@@ -213,6 +237,36 @@ ipcMain.handle('project:chatPrompt', async (_event, payload) => {
   } catch (err) {
     throw serializeError(err.message || 'Failed to query LLM', 'INTERNAL_ERROR');
   }
+});
+
+ipcMain.handle('config:get', async () => {
+  if (!configPath) {
+    configPath = path.join(app.getPath('userData'), CONFIG_FILENAME);
+  }
+  return readConfig(configPath);
+});
+
+ipcMain.handle('config:update', async (_event, payload) => {
+  if (!configPath) {
+    configPath = path.join(app.getPath('userData'), CONFIG_FILENAME);
+  }
+  return writeConfig(configPath, payload || {});
+});
+
+ipcMain.handle('app:close-response', (_event, payload) => {
+  const shouldClose = !!(payload && payload.shouldClose);
+  if (shouldClose && mainWindow && !mainWindow.isDestroyed()) {
+    isQuitting = true;
+    mainWindow.close();
+  }
+});
+
+ipcMain.handle('window:setTitle', (_event, payload) => {
+  const title = payload?.title;
+  if (mainWindow && typeof title === 'string') {
+    mainWindow.setTitle(title.trim() || 'Cursor for Math Proofs');
+  }
+  return null;
 });
 
 ipcMain.handle('project:list', async () => {

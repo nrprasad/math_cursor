@@ -1,5 +1,5 @@
 import katex from 'katex';
-import type { MouseEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 interface TextUnitProps {
@@ -133,6 +133,28 @@ export default function TextUnit({
   const shouldShowBody = collapsible ? expanded : true;
   const displayHeading = showHeading && (normalizedHeading.length > 0 || collapsible);
 
+  const handleHeadingClick = useCallback(
+    (event: MouseEvent<HTMLSpanElement>) => {
+      event.stopPropagation();
+      if (!collapsible) return;
+      if (event.defaultPrevented) return;
+      toggle();
+    },
+    [collapsible, toggle],
+  );
+
+  const handleHeadingKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLSpanElement>) => {
+      event.stopPropagation();
+      if (!collapsible) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        toggle();
+      }
+    },
+    [collapsible, toggle],
+  );
+
   const handleContainerClick = useCallback(
     (event: MouseEvent<HTMLElement>) => {
       if (!collapsible || expanded) return;
@@ -155,7 +177,15 @@ export default function TextUnit({
     <article className={containerClassName} onClick={handleContainerClick}>
       {displayHeading ? (
         <div className="flex items-center justify-between gap-3 pb-2">
-          <span className="text-base font-semibold italic text-slate-200 break-words">
+          <span
+            role={collapsible ? 'button' : undefined}
+            tabIndex={collapsible ? 0 : undefined}
+            onClick={handleHeadingClick}
+            onKeyDown={handleHeadingKeyDown}
+            className={`break-words text-base font-semibold italic text-slate-200 ${
+              collapsible ? 'cursor-pointer select-none hover:text-slate-100 focus:outline-none focus-visible:text-sky-200' : ''
+            }`}
+          >
             {normalizedHeading || 'Untitled'}
           </span>
           {collapsible ? (

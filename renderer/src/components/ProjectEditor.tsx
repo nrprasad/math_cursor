@@ -17,7 +17,7 @@ import {
   getPitfallBody,
   getPitfallName,
 } from '../lib/display';
-import type { ConversationMessage, Project } from '../lib/types';
+import type { ChatThread, ConversationMessage, Project } from '../lib/types';
 import { buildPrompt } from '../lib/prompt';
 import SplitPane from './SplitPane';
 import TextUnit from './TextUnit';
@@ -199,6 +199,16 @@ function createId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function extractThreadNumber(title: string | null | undefined): number {
+  if (!title) return 0;
+  const match = title.trim().match(/^Thread\s+#?(\d+)$/i);
+  if (match && match[1]) {
+    const parsed = Number.parseInt(match[1], 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
 function formatUnitHeading(label: string, index: number, name: string | null | undefined) {
   const trimmed = name?.trim();
   if (trimmed && trimmed.length) {
@@ -247,7 +257,9 @@ export default function ProjectEditor({ projectId }: Props) {
   const [pitfalls, setPitfalls] = useState<Project["pitfalls"]>([]);
 
   const [queryText, setQueryText] = useState("");
-  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [chatThreads, setChatThreads] = useState<Project['chatThreads']>([]);
+  const [openThreadIds, setOpenThreadIds] = useState<string[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const [activeProofLemma, setActiveProofLemma] = useState<Project['lemmas'][number] | null>(null);
@@ -257,11 +269,287 @@ export default function ProjectEditor({ projectId }: Props) {
   const [chatSuggestions, setChatSuggestions] = useState<ChatSuggestion[]>([]);
   const [chatSuggestionIndex, setChatSuggestionIndex] = useState(0);
   const [visibleUserMessages, setVisibleUserMessages] = useState(5);
+  const threadCounterRef = useRef(0);
+  const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
+  const [threadNameDraft, setThreadNameDraft] = useState("");
+  const [threadMenu, setThreadMenu] = useState<{ threadId: string; x: number; y: number } | null>(null);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [showUnsavedModal, setShowUnsavedModal] = useState(false);
+  const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
+  const activeThread = useMemo(
+    () => chatThreads.find((thread) => thread.id === activeThreadId) ?? null,
+    [chatThreads, activeThreadId],
+  );
+  const activeThreadMessages = activeThread?.messages ?? [];
   const totalUserMessages = useMemo(
-    () => chatHistory.filter((message) => message.role === 'user').length,
-    [chatHistory],
+    () => activeThreadMessages.filter((message) => message.role === 'user').length,
+    [activeThreadMessages],
   );
   const hiddenUserMessages = Math.max(0, totalUserMessages - visibleUserMessages);
+
+  const updateThreads = useCallback(
+    (mutator: (threads: ChatThread[]) => ChatThread[]) => {
+      setChatThreads((prev) => {
+        const next = mutator(prev);
+        if (next === prev) {
+          return prev;
+        }
+        setProject((prevProject) => (prevProject ? { ...prevProject, chatThreads: next } : prevProject));
+        return next;
+      });
+    },
+    [setProject],
+  );
+
+  const updateThreadById = useCallback(
+    (threadId: string, mutator: (thread: ChatThread) => ChatThread | null) => {
+      updateThreads((prev) => {
+        let changed = false;
+        const next: ChatThread[] = [];
+        prev.forEach((thread) => {
+          if (thread.id !== threadId) {
+            next.push(thread);
+            return;
+          }
+          const result = mutator(thread);
+          if (result) {
+            next.push(result);
+          }
+          if (result !== thread) {
+            changed = true;
+          }
+          if (!result) {
+            changed = true;
+          }
+        });
+        if (!changed) {
+          return prev;
+        }
+        return next;
+      });
+    },
+    [updateThreads],
+  );
+
+  const openThreads = useMemo(() => {
+    if (!openThreadIds.length) {
+      return [];
+    }
+    const lookup = new Map(chatThreads.map((thread) => [thread.id, thread]));
+    return openThreadIds
+      .map((id) => lookup.get(id))
+      .filter((thread): thread is ChatThread => Boolean(thread));
+  }, [chatThreads, openThreadIds]);
+
+  const handleOpenThread = useCallback(
+    (threadId: string) => {
+      if (!chatThreads.some((thread) => thread.id === threadId)) {
+        return;
+      }
+      setOpenThreadIds((prev) => (prev.includes(threadId) ? prev : [...prev, threadId]));
+      setActiveThreadId(threadId);
+    },
+    [chatThreads],
+  );
+
+  const handleCreateThread = useCallback(() => {
+    const nextNumber = threadCounterRef.current + 1;
+    threadCounterRef.current = nextNumber;
+    const nowIso = new Date().toISOString();
+    const newThread: ChatThread = {
+      id: createId('thread'),
+      title: `Thread #${nextNumber}`,
+      messages: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    updateThreads((prev) => [...prev, newThread]);
+    setOpenThreadIds((prev) => [...prev, newThread.id]);
+    setActiveThreadId(newThread.id);
+    setVisibleUserMessages(5);
+    setSelectedChatId(null);
+    setChatSuggestions([]);
+    setChatSuggestionIndex(0);
+  }, [updateThreads]);
+
+  const handleCloseThread = useCallback((threadId: string) => {
+    setOpenThreadIds((prev) => {
+      if (!prev.includes(threadId)) {
+        return prev;
+      }
+      const next = prev.filter((id) => id !== threadId);
+      setActiveThreadId((current) => {
+        if (current && current !== threadId) {
+          return current;
+        }
+        return next[0] ?? null;
+      });
+      return next;
+    });
+    setThreadMenu(null);
+  }, []);
+
+  const buildSerializableProject = useCallback(() => {
+    if (!project) return null;
+    const sanitizedTitle = titleDraft.trim() || DEFAULT_PROJECT_TITLE;
+    const notationArray: Project['notation'] = notationText.trim()
+      ? [
+          {
+            id: project.notation[0]?.id || 'notation',
+            symbol: project.notation[0]?.symbol || '',
+            description: notationText.trim(),
+          },
+        ]
+      : [];
+
+    return {
+      ...project,
+      title: sanitizedTitle,
+      notation: notationArray,
+      definitions,
+      lemmas,
+      facts,
+      conjectures,
+      ideas,
+      pitfalls,
+      chatThreads,
+    } satisfies Project;
+  }, [
+    project,
+    titleDraft,
+    notationText,
+    definitions,
+    lemmas,
+    facts,
+    conjectures,
+    ideas,
+    pitfalls,
+    chatThreads,
+  ]);
+
+  const snapshotFromProject = useCallback((proj: Project) => {
+    const { updatedAt, ...rest } = proj;
+    return JSON.stringify(rest);
+  }, []);
+
+  const beginRenamingThread = useCallback((thread: ChatThread) => {
+    setRenamingThreadId(thread.id);
+    setThreadNameDraft(thread.title);
+    setThreadMenu(null);
+  }, []);
+
+  const finishRenamingThread = useCallback(
+    (threadId: string, rawName: string) => {
+      updateThreadById(threadId, (thread) => {
+        const trimmed = rawName.trim();
+        let title = trimmed;
+        if (!trimmed.length) {
+          const existingNumber = extractThreadNumber(thread.title);
+          if (existingNumber > 0) {
+            title = `Thread #${existingNumber}`;
+          } else {
+            const nextNumber = threadCounterRef.current + 1;
+            threadCounterRef.current = nextNumber;
+            title = `Thread #${nextNumber}`;
+          }
+        }
+        if (title === thread.title) {
+          return thread;
+        }
+        return {
+          ...thread,
+          title,
+          updatedAt: new Date().toISOString(),
+        };
+      });
+      setRenamingThreadId(null);
+      setThreadNameDraft('');
+    },
+    [updateThreadById],
+  );
+
+  const cancelRenamingThread = useCallback(() => {
+    setRenamingThreadId(null);
+    setThreadNameDraft('');
+  }, []);
+
+  const handleDeleteThread = useCallback(
+    (threadId: string) => {
+      setRenamingThreadId((current) => (current === threadId ? null : current));
+      updateThreads((prev) => {
+        if (!prev.some((thread) => thread.id === threadId)) {
+          return prev;
+        }
+        const next = prev.filter((thread) => thread.id !== threadId);
+        setOpenThreadIds((current) => {
+          const filtered = current
+            .filter((id) => id !== threadId)
+            .filter((id) => next.some((thread) => thread.id === id));
+          if (!filtered.length && next.length) {
+            filtered.push(next[0].id);
+          }
+          return filtered;
+        });
+        setActiveThreadId((current) => {
+          if (current && current !== threadId) {
+            if (next.some((thread) => thread.id === current)) {
+              return current;
+            }
+          }
+          return next[0]?.id ?? null;
+        });
+        return next;
+      });
+      setSelectedChatId(null);
+      setThreadMenu(null);
+    },
+    [updateThreads],
+  );
+
+  const handleRenameProject = useCallback(() => {
+    if (!project) return;
+    const currentTitle = project.title?.trim() || DEFAULT_PROJECT_TITLE;
+    setRenameDraft(currentTitle);
+    setShowRenameModal(true);
+  }, [project]);
+
+  const handleRenameSave = useCallback(() => {
+    if (!project) {
+      setShowRenameModal(false);
+      return;
+    }
+    const sanitized = renameDraft.trim() || DEFAULT_PROJECT_TITLE;
+    if (sanitized === (project.title?.trim() || DEFAULT_PROJECT_TITLE)) {
+      setShowRenameModal(false);
+      return;
+    }
+    setTitleDraft(sanitized);
+    setProject((prev) => (prev ? { ...prev, title: sanitized } : prev));
+    setShowRenameModal(false);
+  }, [project, renameDraft]);
+
+  useEffect(() => {
+    if (!threadMenu) {
+      return undefined;
+    }
+    const closeMenu = () => setThreadMenu(null);
+    const handleKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setThreadMenu(null);
+      }
+    };
+    window.addEventListener('mousedown', closeMenu);
+    window.addEventListener('contextmenu', closeMenu);
+    window.addEventListener('keydown', handleKey);
+    return () => {
+      window.removeEventListener('mousedown', closeMenu);
+      window.removeEventListener('contextmenu', closeMenu);
+    window.removeEventListener('keydown', handleKey);
+    };
+  }, [threadMenu]);
 
   const [showDefinitionForm, setShowDefinitionForm] = useState(false);
   const [newDefinitionTitle, setNewDefinitionTitle] = useState("");
@@ -286,7 +574,8 @@ export default function ProjectEditor({ projectId }: Props) {
   const [newPitfallName, setNewPitfallName] = useState("");
   const [newPitfallDescription, setNewPitfallDescription] = useState("");
 
-  const [llmModel, setLlmModel] = useState('gpt-5');
+  const [llmProvider, setLlmProvider] = useState('openai');
+  const [llmModel, setLlmModel] = useState('gpt-4.1-mini');
   const [llmApiKey, setLlmApiKey] = useState('');
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
@@ -440,15 +729,60 @@ export default function ProjectEditor({ projectId }: Props) {
         name: stripAutoLabel(pitfall.name, "Pitfall"),
       }));
 
-      const history = Array.isArray(loadedProject.chatHistory)
-        ? loadedProject.chatHistory
+      const rawThreads = Array.isArray(loadedProject.chatThreads)
+        ? loadedProject.chatThreads
+        : [];
+      let threads: ChatThread[] = rawThreads.map((thread, index) => {
+        const messages = Array.isArray(thread.messages) ? thread.messages : [];
+        return {
+          id: thread.id && typeof thread.id === 'string' ? thread.id : createId('thread'),
+          title: thread.title && thread.title.trim().length ? thread.title.trim() : `Thread #${index + 1}`,
+          messages: messages
             .filter((message) => message && typeof message.content === 'string')
-            .map((message, index) => ({
-              id: message.id || createId(`chat-${index}`),
+            .map((message, messageIndex) => ({
+              id:
+                message.id && typeof message.id === 'string'
+                  ? message.id
+                  : createId(`chat-${messageIndex}`),
               role: message.role === 'assistant' ? 'assistant' : 'user',
               content: message.content,
-            }))
-        : [];
+            })),
+          createdAt: thread.createdAt && typeof thread.createdAt === 'string'
+            ? thread.createdAt
+            : new Date().toISOString(),
+          updatedAt: thread.updatedAt && typeof thread.updatedAt === 'string'
+            ? thread.updatedAt
+            : new Date().toISOString(),
+        };
+      });
+
+      if (!threads.length) {
+        const fallbackMessages = Array.isArray(loadedProject.chatHistory)
+          ? loadedProject.chatHistory
+              .filter((message) => message && typeof message.content === 'string')
+              .map((message, index) => ({
+                id: message.id || createId(`chat-${index}`),
+                role: message.role === 'assistant' ? 'assistant' : 'user',
+                content: message.content,
+              }))
+          : [];
+        const createdAt = new Date().toISOString();
+        threads = [
+          {
+            id: createId('thread'),
+            title: 'Thread #1',
+            messages: fallbackMessages,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        ];
+      }
+
+      const highestThreadNumber = threads.reduce((max, thread) => {
+        const number = extractThreadNumber(thread.title);
+        return number > max ? number : max;
+      }, 0);
+      threadCounterRef.current = Math.max(highestThreadNumber, threads.length);
 
       const normalizedProject: Project = {
         ...loadedProject,
@@ -458,8 +792,10 @@ export default function ProjectEditor({ projectId }: Props) {
         conjectures: conjecturesWithNames,
         ideas: ideasWithNames,
         pitfalls: pitfallsWithNames,
-        chatHistory: history,
+        chatThreads: threads,
       };
+
+      const snapshot = snapshotFromProject(normalizedProject);
 
       setProject(normalizedProject);
       setEtag(loadedEtag);
@@ -474,15 +810,20 @@ export default function ProjectEditor({ projectId }: Props) {
       setConjectures(conjecturesWithNames);
       setIdeas(ideasWithNames);
       setPitfalls(pitfallsWithNames);
-      setChatHistory(history);
+      setChatThreads(threads);
+      setOpenThreadIds(threads.map((thread) => thread.id));
+      setActiveThreadId((current) => {
+        if (current && threads.some((thread) => thread.id === current)) {
+          return current;
+        }
+        return threads[0]?.id ?? null;
+      });
+      setLastSavedSnapshot(snapshot);
+      setIsDirty(false);
       setVisibleUserMessages(5);
       setRawChatMessages({});
       setSelectedChatId(null);
       setSelectedLemmaId(lemmasWithNames[0]?.id ?? "");
-      const nextModel = normalizedProject.settings?.llm?.defaultModel?.trim() || 'gpt-5';
-      setLlmModel(nextModel);
-      const nextApiKey = normalizedProject.settings?.llm?.apiKey?.trim() || '';
-      setLlmApiKey(nextApiKey);
       setActiveProofLemma(null);
       setQueryText("");
       closeAllEditors();
@@ -492,14 +833,111 @@ export default function ProjectEditor({ projectId }: Props) {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to load project";
       setError(message);
+      setLastSavedSnapshot(null);
+      setIsDirty(false);
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, snapshotFromProject]);
 
   useEffect(() => {
     loadProject();
   }, [loadProject]);
+
+  useEffect(() => {
+    if (project) {
+      const nextTitle = project.title?.trim() || DEFAULT_PROJECT_TITLE;
+      setTitleDraft(nextTitle);
+    } else {
+      setTitleDraft('');
+    }
+  }, [project?.title, project]);
+
+  useEffect(() => {
+    const nextTitle = project
+      ? project.title?.trim() || DEFAULT_PROJECT_TITLE
+      : 'Cursor for Math Proofs';
+    if (window.desktopApi?.setWindowTitle) {
+      void window.desktopApi.setWindowTitle(nextTitle);
+    }
+  }, [project?.title, project]);
+
+  useEffect(() => () => {
+    if (window.desktopApi?.setWindowTitle) {
+      void window.desktopApi.setWindowTitle('Cursor for Math Proofs');
+    }
+  }, []);
+
+  useEffect(() => {
+    setVisibleUserMessages(5);
+    setSelectedChatId(null);
+    setChatSuggestions([]);
+    setChatSuggestionIndex(0);
+    setQueryText('');
+  }, [activeThreadId]);
+
+  const serializedProjectSnapshot = useMemo(() => {
+    const payload = buildSerializableProject();
+    if (!payload) return null;
+    const { updatedAt, ...rest } = payload;
+    return JSON.stringify(rest);
+  }, [buildSerializableProject]);
+
+  useEffect(() => {
+    if (serializedProjectSnapshot === null) {
+      setIsDirty(false);
+      return;
+    }
+    if (lastSavedSnapshot === null) {
+      setIsDirty(true);
+      return;
+    }
+    setIsDirty(serializedProjectSnapshot !== lastSavedSnapshot);
+  }, [serializedProjectSnapshot, lastSavedSnapshot]);
+
+  useEffect(() => {
+    if (showRenameModal) {
+      setRenameDraft(project?.title?.trim() || DEFAULT_PROJECT_TITLE);
+    }
+  }, [project?.title, showRenameModal]);
+
+  useEffect(() => {
+    if (!showRenameModal) return;
+    const handleKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setShowRenameModal(false);
+        setRenameDraft(project?.title?.trim() || DEFAULT_PROJECT_TITLE);
+      } else if (event.key === 'Enter') {
+        if ((event.target as HTMLElement)?.tagName === 'INPUT') {
+          event.preventDefault();
+          handleRenameSave();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [handleRenameSave, project?.title, showRenameModal]);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadConfig() {
+      try {
+        if (!window.desktopApi?.getConfig) return;
+        const config = await window.desktopApi.getConfig();
+        if (!isMounted || !config) return;
+        setLlmProvider(config.llm?.provider?.trim() || 'openai');
+        setLlmModel(config.llm?.model?.trim() || 'gpt-4.1-mini');
+        setLlmApiKey(config.llm?.apiKey?.trim() || '');
+      } catch (error) {
+        console.error('Failed to load LLM config', error);
+      }
+    }
+    loadConfig();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!lemmas.length) {
@@ -511,83 +949,89 @@ export default function ProjectEditor({ projectId }: Props) {
     }
   }, [lemmas, selectedLemmaId]);
 
-  const handleSave = useCallback(async () => {
-    if (!project) return;
-    setStatus(null);
-    setError(null);
-    try {
-      const sanitizedTitle = titleDraft.trim() || DEFAULT_PROJECT_TITLE;
-      const notationArray: Project['notation'] = notationText.trim()
-        ? [
-            {
-              id: project.notation[0]?.id || 'notation',
-              symbol: project.notation[0]?.symbol || '',
-              description: notationText.trim(),
-            },
-          ]
-        : [];
+  const performSave = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!project || isSaving || !etag) return;
+      const payload = buildSerializableProject();
+      if (!payload) return;
 
-      const updated: Project = {
-        ...project,
-        title: sanitizedTitle,
-        notation: notationArray,
-        definitions,
-        lemmas,
-        facts,
-        conjectures,
-        ideas,
-        pitfalls,
-        chatHistory,
-        settings: {
-          ...project.settings,
-          llm: {
-            ...project.settings.llm,
-            defaultModel: llmModel,
-            apiKey: llmApiKey,
-          },
-        },
-        updatedAt: new Date().toISOString(),
-      };
-
-      const { etag: newEtag } = await saveProject(updated, etag);
-      setProject(updated);
-      setDefinitions(updated.definitions);
-      setLemmas(updated.lemmas);
-      setFacts(updated.facts);
-      setConjectures(updated.conjectures);
-      setIdeas(updated.ideas);
-      setPitfalls(updated.pitfalls);
-      closeAllEditors();
-      setEtag(newEtag);
-      setStatus(null);
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'PRECONDITION_FAILED') {
-        setStatus(null);
-        setError('Save conflict: project was updated elsewhere. Reload and try again.');
-      } else if (err instanceof Error) {
-        setStatus(null);
-        setError(err.message);
-      } else {
-        setStatus(null);
-        setError('Failed to save project');
+      if (payload.title !== titleDraft) {
+        setTitleDraft(payload.title);
       }
-    }
-  }, [
-    project,
-    notationText,
-    definitions,
-    lemmas,
-    facts,
-    conjectures,
-    ideas,
-    pitfalls,
-    titleDraft,
-    llmModel,
-    llmApiKey,
-    saveProject,
-    etag,
-    closeAllEditors,
-  ]);
+
+      if (!silent) {
+        setStatus('Saving project...');
+        setError(null);
+      }
+
+      setIsSaving(true);
+      try {
+        const updated: Project = {
+          ...payload,
+          updatedAt: new Date().toISOString(),
+        };
+        const { etag: newEtag } = await saveProject(updated, etag);
+        setProject(updated);
+        setDefinitions(updated.definitions);
+        setLemmas(updated.lemmas);
+        setFacts(updated.facts);
+        setConjectures(updated.conjectures);
+        setIdeas(updated.ideas);
+        setPitfalls(updated.pitfalls);
+        setChatThreads(updated.chatThreads);
+        if (!silent) {
+          closeAllEditors();
+        }
+        setEtag(newEtag);
+        setLastSavedSnapshot(snapshotFromProject(updated));
+        setIsDirty(false);
+        if (!silent) {
+          setStatus('Project saved');
+          setTimeout(() => setStatus(null), 2000);
+        }
+      } catch (err) {
+        if (!silent) {
+          if (err instanceof ApiError && err.code === 'PRECONDITION_FAILED') {
+            setStatus(null);
+            setError('Save conflict: project was updated elsewhere. Reload and try again.');
+          } else if (err instanceof Error) {
+            setStatus(null);
+            setError(err.message);
+          } else {
+            setStatus(null);
+            setError('Failed to save project');
+          }
+        }
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [
+      project,
+      isSaving,
+      buildSerializableProject,
+      saveProject,
+      etag,
+      closeAllEditors,
+      snapshotFromProject,
+      titleDraft,
+    ],
+  );
+
+  const handleSave = useCallback(() => {
+    void performSave({ silent: false });
+  }, [performSave]);
+
+  useEffect(() => {
+    if (!project) return undefined;
+    const interval = window.setInterval(() => {
+      if (!isDirty || isSaving || showRenameModal || showUnsavedModal) {
+        return;
+      }
+      void performSave({ silent: true });
+    }, 120_000);
+    return () => window.clearInterval(interval);
+  }, [project, isDirty, isSaving, performSave, showRenameModal, showUnsavedModal]);
 
   const handleDraftProof = useCallback(async () => {
     if (!project) return;
@@ -630,20 +1074,29 @@ export default function ProjectEditor({ projectId }: Props) {
     setActiveProofLemma(lemma);
   }, []);
 
-  const handleGenerateProof = useCallback((lemma: Project['lemmas'][number]) => {
-    const statement = lemma.statementTex?.trim() || lemma.title?.trim() || lemma.id || '';
-    const message = statement
-      ? `Generate proof for Lemma: ${statement}`
-      : 'Generate proof for the selected lemma.';
-    const entry: ChatMessage = { id: createId('chat-user'), role: 'user', content: message };
-    const newHistory = [...chatHistory, entry];
-    setChatHistory(newHistory);
-    setProject((prev) => (prev ? { ...prev, chatHistory: newHistory } : prev));
-    setStatus('Chat updated (unsaved)');
-    setSelectedLemmaId(lemma.id);
-    setProofEditLemmaId(null);
-    setProofDraft('');
-  }, [chatHistory, setProject, setStatus]);
+  const handleGenerateProof = useCallback(
+    (lemma: Project['lemmas'][number]) => {
+      const targetThread = activeThread;
+      if (!targetThread) {
+        return;
+      }
+      const statement = lemma.statementTex?.trim() || lemma.title?.trim() || lemma.id || '';
+      const message = statement
+        ? `Generate proof for Lemma: ${statement}`
+        : 'Generate proof for the selected lemma.';
+      const entry: ChatMessage = { id: createId('chat-user'), role: 'user', content: message };
+      const timestamp = new Date().toISOString();
+      updateThreadById(targetThread.id, (thread) => ({
+        ...thread,
+        messages: [...thread.messages, entry],
+        updatedAt: timestamp,
+      }));
+      setSelectedLemmaId(lemma.id);
+      setProofEditLemmaId(null);
+      setProofDraft('');
+    },
+    [activeThread, updateThreadById],
+  );
 
   const handleSaveProof = useCallback(
     (lemmaId: string, proof: string) => {
@@ -850,6 +1303,11 @@ export default function ProjectEditor({ projectId }: Props) {
       return;
     }
 
+    const targetThread = activeThread;
+    if (!targetThread) {
+      return;
+    }
+
     if (trimmed.toLowerCase() === 'clear') {
       setQueryText('');
       setVisibleUserMessages(5);
@@ -879,7 +1337,7 @@ export default function ProjectEditor({ projectId }: Props) {
       conjectures,
       ideas,
       pitfalls,
-      chatHistory,
+      chatThreads,
     };
 
     const prompt = buildPrompt(promptProject, trimmed);
@@ -891,29 +1349,38 @@ export default function ProjectEditor({ projectId }: Props) {
       content: 'Generating response…',
     };
 
-    const llmHistory = [...chatHistory, userMessage];
-    const newHistory = [...llmHistory, placeholderMessage];
+    const llmHistory = [...targetThread.messages, userMessage];
+    const timestamp = new Date().toISOString();
 
-    setChatHistory(newHistory);
-    setProject((prev) => (prev ? { ...prev, chatHistory: newHistory } : prev));
+    updateThreadById(targetThread.id, (thread) => ({
+      ...thread,
+      messages: [...thread.messages, userMessage, placeholderMessage],
+      updatedAt: timestamp,
+    }));
+
     setRawChatMessages((prev) => ({ ...prev, [placeholderResponseId]: false }));
     setQueryText('');
     setChatSuggestions([]);
     setChatSuggestionIndex(0);
     setSelectedChatId(null);
 
+    const historyPayload = llmHistory.map((entry) => ({ role: entry.role, content: entry.content }));
+
     void (async () => {
       try {
-        const provider = project.settings?.llm?.defaultProvider?.trim() || 'openai';
         const message = await sendChatPrompt({
           prompt,
-          provider,
+          provider: llmProvider,
           model: llmModel,
           apiKey: llmApiKey?.trim() || undefined,
-          history: llmHistory.map((entry) => ({ role: entry.role, content: entry.content })),
+          history: historyPayload,
         });
-        setChatHistory((prev) => {
-          const next = prev.map((entry) =>
+        updateThreadById(targetThread.id, (thread) => {
+          const exists = thread.messages.some((entry) => entry.id === placeholderResponseId);
+          if (!exists) {
+            return thread;
+          }
+          const nextMessages = thread.messages.map((entry) =>
             entry.id === placeholderResponseId
               ? {
                   ...entry,
@@ -921,13 +1388,20 @@ export default function ProjectEditor({ projectId }: Props) {
                 }
               : entry,
           );
-          setProject((prevProject) => (prevProject ? { ...prevProject, chatHistory: next } : prevProject));
-          return next;
+          return {
+            ...thread,
+            messages: nextMessages,
+            updatedAt: new Date().toISOString(),
+          };
         });
       } catch (error) {
         const message = error instanceof ApiError ? error.message : 'Failed to reach the assistant';
-        setChatHistory((prev) => {
-          const next = prev.map((entry) =>
+        updateThreadById(targetThread.id, (thread) => {
+          const exists = thread.messages.some((entry) => entry.id === placeholderResponseId);
+          if (!exists) {
+            return thread;
+          }
+          const nextMessages = thread.messages.map((entry) =>
             entry.id === placeholderResponseId
               ? {
                   ...entry,
@@ -935,14 +1409,18 @@ export default function ProjectEditor({ projectId }: Props) {
                 }
               : entry,
           );
-          setProject((prevProject) => (prevProject ? { ...prevProject, chatHistory: next } : prevProject));
-          return next;
+          return {
+            ...thread,
+            messages: nextMessages,
+            updatedAt: new Date().toISOString(),
+          };
         });
       }
     })();
   }, [
     project,
     queryText,
+    activeThread,
     notationText,
     definitions,
     lemmas,
@@ -950,11 +1428,11 @@ export default function ProjectEditor({ projectId }: Props) {
     conjectures,
     ideas,
     pitfalls,
-    chatHistory,
+    chatThreads,
+    llmProvider,
     llmModel,
     llmApiKey,
-    setProject,
-    setStatus,
+    updateThreadById,
   ]);
 
   const handleChatKeyDown = useCallback(
@@ -997,8 +1475,8 @@ export default function ProjectEditor({ projectId }: Props) {
   }, [chatMessages.length]);
 
   useEffect(() => {
-    setChatMessages(computeVisibleMessages(chatHistory, visibleUserMessages));
-  }, [chatHistory, visibleUserMessages]);
+    setChatMessages(computeVisibleMessages(activeThreadMessages, visibleUserMessages));
+  }, [activeThreadMessages, visibleUserMessages]);
 
   useEffect(() => {
     if (!chatSuggestions.length) {
@@ -1017,43 +1495,6 @@ export default function ProjectEditor({ projectId }: Props) {
       setActiveProofLemma(latest);
     }
   }, [activeProofLemma, lemmas]);
-
-  useEffect(() => {
-    if (project) {
-      const nextTitle = project.title?.trim() ? project.title : DEFAULT_PROJECT_TITLE;
-      setTitleDraft(nextTitle);
-    } else {
-      setTitleDraft('');
-    }
-  }, [project]);
-
-  const commitTitle = useCallback(() => {
-    if (!project) return;
-    const sanitized = titleDraft.trim() || DEFAULT_PROJECT_TITLE;
-    setTitleDraft(sanitized);
-    const current = project.title?.trim() ? project.title : DEFAULT_PROJECT_TITLE;
-    if (sanitized === current) {
-      return;
-    }
-    setProject((prev) => (prev ? { ...prev, title: sanitized } : prev));
-    setError(null);
-  }, [project, titleDraft]);
-
-  const handleTitleKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>) => {
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        commitTitle();
-        event.currentTarget.blur();
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        const resetTitle = project?.title?.trim() ? project.title : DEFAULT_PROJECT_TITLE;
-        setTitleDraft(resetTitle);
-        event.currentTarget.blur();
-      }
-    },
-    [commitTitle, project],
-  );
 
   useEffect(() => {
     if (!window.desktopApi || typeof window.desktopApi.onMenu !== 'function') {
@@ -1081,6 +1522,38 @@ export default function ProjectEditor({ projectId }: Props) {
       });
     };
   }, [handleSave, loadProject, handleExport, handleDraftProof]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      const isMac = navigator.platform.toLowerCase().includes('mac');
+      const primaryPressed = isMac ? event.metaKey : event.ctrlKey;
+      if (primaryPressed && event.shiftKey && (event.key === 'r' || event.key === 'R')) {
+        event.preventDefault();
+        handleRenameProject();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [handleRenameProject]);
+
+  useEffect(() => {
+    if (!window.desktopApi?.onAppCloseRequest) {
+      return undefined;
+    }
+    const unsubscribe = window.desktopApi.onAppCloseRequest(() => {
+      setShowRenameModal(false);
+      if (isDirty) {
+        setShowUnsavedModal(true);
+      } else {
+        if (window.desktopApi?.respondToClose) {
+          void window.desktopApi.respondToClose(true);
+        }
+      }
+    });
+    return unsubscribe;
+  }, [isDirty]);
 
   if (loading) {
     return (
@@ -1821,50 +2294,193 @@ export default function ProjectEditor({ projectId }: Props) {
   const rightPane = (
     <div className="flex h-full flex-col gap-4 overflow-hidden">
       <section className={`${PANEL_CLASS} flex flex-1 flex-col overflow-hidden p-0`} aria-label="Assistant terminal">
+        <div className="relative border-b border-slate-800 bg-slate-900 px-2 pt-2 pb-1">
+          <div className="flex items-end gap-1 overflow-x-auto pb-0.5">
+            {openThreads.map((thread) => {
+              const isActive = thread.id === activeThreadId;
+              return (
+                <div
+                  key={thread.id}
+                  className={`app-no-drag inline-flex h-9 items-center gap-1 rounded-t-md border border-b-0 px-3 text-sm transition ${
+                    isActive
+                      ? 'border-slate-600 bg-slate-950 text-slate-100'
+                      : 'border-transparent bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-slate-100'
+                  }`}
+                >
+                  {renamingThreadId === thread.id ? (
+                    <input
+                      autoFocus
+                      className="app-no-drag h-6 w-32 rounded border border-slate-700 bg-slate-950 px-2 text-sm text-slate-100 focus:border-sky-400 focus:outline-none focus:ring-0"
+                      value={threadNameDraft}
+                      onChange={(event) => setThreadNameDraft(event.target.value)}
+                      onBlur={() => finishRenamingThread(thread.id, threadNameDraft)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          finishRenamingThread(thread.id, threadNameDraft);
+                        } else if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelRenamingThread();
+                        }
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      className={`app-no-drag flex items-center gap-2 py-1 text-sm font-medium ${
+                        isActive ? 'text-slate-100' : 'text-slate-300'
+                      }`}
+                      onClick={() => setActiveThreadId(thread.id)}
+                      onDoubleClick={() => beginRenamingThread(thread)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setThreadMenu({ threadId: thread.id, x: event.clientX, y: event.clientY });
+                      }}
+                    >
+                      <span
+                        className="truncate"
+                        title={thread.title}
+                      >
+                        {thread.title || 'Untitled thread'}
+                      </span>
+                    </button>
+                  )}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      className="app-no-drag rounded px-1 text-xs text-slate-400 transition hover:bg-slate-800/90 hover:text-slate-100"
+                      onClick={() => handleCloseThread(thread.id)}
+                      aria-label={`Close ${thread.title || 'thread'}`}
+                    >
+                      X
+                    </button>
+                    <button
+                      type="button"
+                      className="app-no-drag flex items-center justify-center rounded px-1 text-xs text-slate-400 transition hover:bg-red-900/80 hover:text-red-200"
+                      onClick={() => handleDeleteThread(thread.id)}
+                      aria-label={`Delete ${thread.title || 'thread'}`}
+                    >
+                      <svg
+                        aria-hidden
+                        focusable="false"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 14 14"
+                        className="fill-current"
+                      >
+                        <path d="M5 1.5h4l.33.5H11c.28 0 .5.22.5.5s-.22.5-.5.5h-.43l-.74 8.14A1.5 1.5 0 018.35 12H5.65a1.5 1.5 0 01-1.48-1.36L3.43 2.5H3c-.28 0-.5-.22-.5-.5s.22-.5.5-.5h1.67L5 1.5zm.17 1l-.7 8.04a.5.5 0 00.5.46h2.7a.5.5 0 00.5-.46L8.47 2.5H5.17z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            <button
+              type="button"
+              className="app-no-drag flex h-8 w-8 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-lg font-semibold text-slate-300 transition hover:border-slate-500 hover:text-slate-100"
+              onClick={handleCreateThread}
+              aria-label="Create new thread"
+            >
+              +
+            </button>
+          </div>
+          {threadMenu ? (
+            <div
+              className="fixed z-50 min-w-[140px] rounded border border-slate-700 bg-slate-900/95 py-1 shadow-xl"
+              style={{ top: threadMenu.y, left: threadMenu.x }}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-slate-100 transition hover:bg-slate-800/80 hover:text-sky-200"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => {
+                  handleCloseThread(threadMenu.threadId);
+                  setThreadMenu(null);
+                }}
+              >
+                Hide
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-slate-100 transition hover:bg-slate-800/80 hover:text-sky-200"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => {
+                  const targetThread = chatThreads.find((thread) => thread.id === threadMenu.threadId);
+                  if (targetThread) {
+                    beginRenamingThread(targetThread);
+                  } else {
+                    setThreadMenu(null);
+                  }
+                }}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-red-300 transition hover:bg-red-900/70"
+                onMouseDown={(event) => event.stopPropagation()}
+                onClick={() => handleDeleteThread(threadMenu.threadId)}
+              >
+                Delete
+              </button>
+            </div>
+          ) : null}
+        </div>
         <form className="flex h-full flex-col bg-slate-950" onSubmit={(event) => event.preventDefault()}>
           <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 font-mono text-[15px] leading-6 text-slate-100">
-            {hiddenUserMessages > 0 ? (
-              <div className="flex justify-center">
-                <button
-                  type="button"
-                  className="rounded border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
-                  onClick={() =>
-                    setVisibleUserMessages((prev) =>
-                      Math.min(prev + 10, totalUserMessages || prev + 10),
-                    )
-                  }
-                >
-                  Show {Math.min(10, hiddenUserMessages)} older messages
-                </button>
+            {activeThread ? (
+              <>
+                {hiddenUserMessages > 0 ? (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      className="rounded border border-slate-700 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
+                      onClick={() =>
+                        setVisibleUserMessages((prev) => Math.min(prev + 10, totalUserMessages || prev + 10))
+                      }
+                    >
+                      Show {Math.min(10, hiddenUserMessages)} older messages
+                    </button>
+                  </div>
+                ) : null}
+                {chatMessages.map((message) => (
+                  <ChatMessageBubble
+                    key={message.id}
+                    message={message}
+                    isSelected={selectedChatId === message.id}
+                    showRaw={Boolean(rawChatMessages[message.id])}
+                    onSelect={(id) => {
+                      if (message.role !== 'assistant') return;
+                      setSelectedChatId((prev) => (prev === id ? null : id));
+                    }}
+                    onToggleRaw={(id) => {
+                      setRawChatMessages((prev) => ({ ...prev, [id]: !prev[id] }));
+                    }}
+                  />
+                ))}
+              </>
+            ) : (
+              <div className="flex h-full items-center justify-center text-sm text-slate-400">
+                <p>Select a thread from the View menu or create a new one to start chatting.</p>
               </div>
-            ) : null}
-            {chatMessages.map((message) => (
-              <ChatMessageBubble
-                key={message.id}
-                message={message}
-                isSelected={selectedChatId === message.id}
-                showRaw={Boolean(rawChatMessages[message.id])}
-                onSelect={(id) => {
-                  if (message.role !== 'assistant') return;
-                  setSelectedChatId((prev) => (prev === id ? null : id));
-                }}
-                onToggleRaw={(id) => {
-                  setRawChatMessages((prev) => ({ ...prev, [id]: !prev[id] }));
-                }}
-              />
-            ))}
+            )}
             <div ref={chatEndRef} />
           </div>
           <div className="relative flex items-start gap-2 px-4 pb-4 font-mono text-[15px] leading-6 text-slate-100">
             <span className="select-none text-slate-500">&gt;</span>
             <textarea
               ref={chatInputRef}
-              className="flex-1 resize-none bg-transparent text-[15px] leading-6 text-slate-100 outline-none"
+              className={`flex-1 resize-none bg-transparent text-[15px] leading-6 text-slate-100 outline-none ${
+                activeThread ? '' : 'pointer-events-none text-slate-500'
+              }`}
               value={queryText}
               onChange={handleChatInputChange}
               onKeyDown={handleChatKeyDown}
-              placeholder="type and press enter"
+              placeholder={activeThread ? 'type and press enter' : 'open a thread to chat'}
               rows={1}
+              disabled={!activeThread}
             />
             {chatSuggestions.length ? (
               <ul className="absolute left-[18px] right-0 bottom-full mb-2 max-h-56 max-w-[calc(100%-18px)] overflow-y-auto rounded border border-slate-800 bg-slate-900 py-1 shadow-xl">
@@ -1932,18 +2548,12 @@ export default function ProjectEditor({ projectId }: Props) {
           void handleDraftProof();
         }}
         onOpenSettings={() => setShowSettingsModal(true)}
+        onRename={handleRenameProject}
+        threads={chatThreads}
+        activeThreadId={activeThreadId}
+        openThreadIds={openThreadIds}
+        onSelectThread={handleOpenThread}
       />
-
-      <header className="app-drag flex items-center border-b border-slate-800 bg-slate-950 px-6 py-4">
-        <input
-          aria-label="Project title"
-          className="app-no-drag w-full border-b border-transparent bg-transparent text-2xl font-semibold text-white outline-none focus:border-sky-400 focus:ring-0"
-          value={titleDraft}
-          onChange={(event) => setTitleDraft(event.target.value)}
-          onBlur={commitTitle}
-          onKeyDown={handleTitleKeyDown}
-        />
-      </header>
 
       {error || status ? (
         <div className="space-y-1 px-6 py-2">
@@ -1962,35 +2572,111 @@ export default function ProjectEditor({ projectId }: Props) {
         <LLMSettingsModal
           model={llmModel}
           apiKey={llmApiKey}
-          onSave={({ model, apiKey }) => {
+          onSave={async ({ model, apiKey }) => {
             setLlmModel(model);
             setLlmApiKey(apiKey);
-            setProject((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    settings: {
-                      ...prev.settings,
-                      llm: {
-                        ...prev.settings.llm,
-                        defaultModel: model,
-                        apiKey,
-                      },
-                    },
-                  }
-                : prev,
-            );
-            setStatus('LLM settings updated (unsaved)');
+            try {
+              if (window.desktopApi?.updateConfig) {
+                await window.desktopApi.updateConfig({
+                  llm: {
+                    provider: llmProvider,
+                    model,
+                    apiKey,
+                  },
+                });
+              }
+            } catch (error) {
+              console.error('Failed to update LLM config', error);
+            }
           }}
           onClose={() => setShowSettingsModal(false)}
         />
       ) : null}
       {activeProofLemma ? <ProofModal lemma={activeProofLemma} onClose={() => setActiveProofLemma(null)} /> : null}
+      {showRenameModal ? (
+        <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+          <div className="w-full max-w-md space-y-5 rounded border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+            <header className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">Rename Project</h2>
+              <p className="text-sm text-slate-300">Update the project title shown in the window and menus.</p>
+            </header>
+            <label className="block space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-300">Project Title</span>
+              <input
+                value={renameDraft}
+                onChange={(event) => setRenameDraft(event.target.value)}
+                className="w-full rounded border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+                autoFocus
+              />
+            </label>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                className={SECONDARY_BUTTON_CLASS}
+                onClick={() => {
+                  setShowRenameModal(false);
+                  setRenameDraft(project?.title?.trim() || DEFAULT_PROJECT_TITLE);
+                }}
+              >
+                Cancel
+              </button>
+              <button type="button" className={PRIMARY_BUTTON_CLASS} onClick={handleRenameSave}>
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {showUnsavedModal ? (
+        <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+          <div className="w-full max-w-md space-y-5 rounded border border-slate-700 bg-slate-900 p-6 shadow-2xl">
+            <header className="space-y-1">
+              <h2 className="text-lg font-semibold text-white">Unsaved changes</h2>
+              <p className="text-sm text-slate-300">There are unsaved changes in this project. What would you like to do?</p>
+            </header>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                className={SECONDARY_BUTTON_CLASS}
+                onClick={() => {
+                  setShowUnsavedModal(false);
+                  if (window.desktopApi?.respondToClose) {
+                    void window.desktopApi.respondToClose(false);
+                  }
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={PRIMARY_BUTTON_CLASS}
+                onClick={() => {
+                  setShowUnsavedModal(false);
+                  if (window.desktopApi?.respondToClose) {
+                    void window.desktopApi.respondToClose(true);
+                  }
+                }}
+              >
+                Discard and close
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
 
 type SectionRenderAction = { version: number; expanded: boolean };
+
+type MenuItem =
+  | { type: 'divider' }
+  | {
+      label: string;
+      shortcut?: string;
+      meta?: string;
+      action?: () => void;
+    };
 
 interface ProjectMenuBarProps {
   onSave: () => void;
@@ -1998,9 +2684,25 @@ interface ProjectMenuBarProps {
   onExport: () => void;
   onDraft: () => void;
   onOpenSettings: () => void;
+  onRename: () => void;
+  threads: ChatThread[];
+  activeThreadId: string | null;
+  openThreadIds: string[];
+  onSelectThread: (threadId: string) => void;
 }
 
-function ProjectMenuBar({ onSave, onReload, onExport, onDraft, onOpenSettings }: ProjectMenuBarProps) {
+function ProjectMenuBar({
+  onSave,
+  onReload,
+  onExport,
+  onDraft,
+  onOpenSettings,
+  onRename,
+  threads,
+  activeThreadId,
+  openThreadIds,
+  onSelectThread,
+}: ProjectMenuBarProps) {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
@@ -2015,12 +2717,13 @@ function ProjectMenuBar({ onSave, onReload, onExport, onDraft, onOpenSettings }:
     return () => window.removeEventListener('mousedown', handleClick);
   }, []);
 
-  const menuConfig = useMemo(
+  const menuConfig = useMemo<Record<string, { label: string; items: MenuItem[] }>>(
     () => ({
       file: {
         label: 'File',
         items: [
           { label: 'Save Project', shortcut: 'Ctrl/Cmd + S', action: onSave },
+          { label: 'Rename Project…', shortcut: 'Ctrl/Cmd + Shift + R', action: onRename },
           { label: 'Reload Project', shortcut: 'Ctrl/Cmd + R', action: onReload },
           { label: 'Export LaTeX…', shortcut: 'Ctrl/Cmd + Shift + E', action: onExport },
           { label: 'Draft Proof', shortcut: 'Ctrl/Cmd + D', action: onDraft },
@@ -2059,6 +2762,24 @@ function ProjectMenuBar({ onSave, onReload, onExport, onDraft, onOpenSettings }:
               }
             },
           },
+          ...(threads.length
+            ? ([
+                { type: 'divider' } as MenuItem,
+                ...threads.map<MenuItem>((thread) => {
+                  let meta = 'Hidden';
+                  if (activeThreadId === thread.id) {
+                    meta = 'Active';
+                  } else if (openThreadIds.includes(thread.id)) {
+                    meta = 'Open';
+                  }
+                  return {
+                    label: thread.title || 'Untitled thread',
+                    meta,
+                    action: () => onSelectThread(thread.id),
+                  };
+                }),
+              ] as MenuItem[])
+            : []),
         ],
       },
       settings: {
@@ -2089,7 +2810,18 @@ function ProjectMenuBar({ onSave, onReload, onExport, onDraft, onOpenSettings }:
         ],
       },
     }),
-    [onDraft, onExport, onOpenSettings, onReload, onSave],
+    [
+      onDraft,
+      onExport,
+      onOpenSettings,
+      onReload,
+      onRename,
+      onSave,
+      threads,
+      activeThreadId,
+      openThreadIds,
+      onSelectThread,
+    ],
   );
 
   return (
@@ -2105,23 +2837,32 @@ function ProjectMenuBar({ onSave, onReload, onExport, onDraft, onOpenSettings }:
               {menu.label}
             </button>
             {activeMenu === key ? (
-              <div className="absolute left-0 top-[calc(100%+6px)] min-w-[180px] rounded border border-slate-800 bg-slate-900/95 p-2 shadow-xl">
-                {menu.items.map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    className="app-no-drag flex w-full items-center justify-between rounded px-2 py-1 text-left text-[13px] text-slate-100 transition hover:bg-slate-800/80 hover:text-sky-200"
-                    onClick={() => {
-                      setActiveMenu(null);
-                      if (item.action) {
-                        item.action();
-                      }
-                    }}
-                  >
-                    <span>{item.label}</span>
-                    {item.shortcut ? <span className="pl-3 text-[11px] text-slate-400">{item.shortcut}</span> : null}
-                  </button>
-                ))}
+              <div className="absolute left-0 top-[calc(100%+6px)] min-w-[420px] rounded border border-slate-800 bg-slate-900/95 p-2 shadow-xl">
+                {menu.items.map((item, index) => {
+                  if (item.type === 'divider') {
+                    return <div key={`divider-${menu.label}-${index}`} className="my-2 border-t border-slate-800/70" />;
+                  }
+                  return (
+                    <button
+                      key={item.label}
+                      type="button"
+                      className="app-no-drag flex w-full items-center justify-between rounded px-2 py-1 text-left text-[13px] text-slate-100 transition hover:bg-slate-800/80 hover:text-sky-200"
+                      onClick={() => {
+                        setActiveMenu(null);
+                        if (item.action) {
+                          item.action();
+                        }
+                      }}
+                    >
+                      <span className="flex-1 pr-12 text-left">{item.label}</span>
+                      {item.meta ? (
+                        <span className="w-48 text-right text-[11px] uppercase tracking-wide text-slate-400">{item.meta}</span>
+                      ) : item.shortcut ? (
+                        <span className="w-48 text-right text-[11px] text-slate-400">{item.shortcut}</span>
+                      ) : null}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
           </div>
@@ -2215,6 +2956,9 @@ interface ProofModalProps {
 }
 
 function ProofModal({ lemma, onClose }: ProofModalProps) {
+  const [showSource, setShowSource] = useState(false);
+  const proofText = lemma.proof?.trim() || 'Proof not available.';
+
   return (
     <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
       <div className="w-full max-w-3xl space-y-5 rounded border border-slate-700 bg-slate-900 p-6 shadow-2xl">
@@ -2223,13 +2967,27 @@ function ProofModal({ lemma, onClose }: ProofModalProps) {
           <p className="text-sm text-slate-300">Review the lemma statement and its associated proof.</p>
         </header>
         <TextUnit heading="Lemma" body={getLemmaBody(lemma)} collapsible={false} showHeading className="rounded border border-slate-800 bg-slate-950 px-4 py-3" />
-        <TextUnit
-          heading="Proof"
-          body={lemma.proof?.trim() || 'Proof not available.'}
-          collapsible={false}
-          showHeading
-          className="rounded border border-slate-800 bg-slate-950 px-4 py-3"
-        />
+        <section className="rounded border border-slate-800 bg-slate-950 px-4 py-3">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-base font-semibold italic text-slate-200">Proof</h3>
+            <button
+              type="button"
+              className="rounded border border-slate-600 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
+              onClick={() => setShowSource((prev) => !prev)}
+            >
+              {showSource ? 'hide source' : 'show source'}
+            </button>
+          </div>
+          {showSource ? (
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-slate-900/80 p-3 font-mono text-sm text-slate-200">
+              {proofText}
+            </pre>
+          ) : (
+            <div className="prose prose-invert max-h-96 overflow-auto text-sm leading-relaxed">
+              {renderChatContent(proofText)}
+            </div>
+          )}
+        </section>
         <div className="flex justify-end">
           <button type="button" className={SECONDARY_BUTTON_CLASS} onClick={onClose}>
             Close

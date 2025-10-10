@@ -2,26 +2,27 @@
 
 Electron-based desktop app for experimenting with structured math proof projects. The UI is still built with React/Tailwind, but it now runs fully inside an Electron renderer process and talks directly to the main process for persistence, proof drafting, and LaTeX export.
 
-## Requirements
-- Node.js 18+
-- npm 9+
+## Quick Install (macOS · Windows · Linux)
+1. **Install Node.js 18 or newer** (includes npm). Download from [nodejs.org](https://nodejs.org/) and follow the installer.
+2. **Download the app code**.
+   - Easiest: click the green **Code → Download ZIP** button on GitHub, then unzip it.
+   - Git users can run `git clone https://github.com/<your-org>/cursor-math-proofs-desktop.git`.
+3. **Open a terminal in the project folder** and install dependencies:
+   ```bash
+   npm install
+   ```
+4. **Launch the desktop app**:
+   ```bash
+   npm run dev
+   ```
+   A window opens automatically. Leave the terminal running; it hot-reloads changes if you edit files.
 
-## Setup
+### Want a packaged build?
 ```bash
-npm install
+npm run build   # bundles the renderer into ./dist
+npm run start   # launches Electron against the bundled assets
 ```
-
-## Run in Development
-```bash
-npm run dev
-```
-This starts Vite (renderer hot-reload) and the Electron main process. The window reloads automatically as you edit files under `renderer/` or `electron/`.
-
-## Build & Run Production Bundle
-```bash
-npm run build   # produces renderer assets in ./dist
-npm run start   # launches Electron pointing at the built assets
-```
+Wrap the build with a packager like `electron-builder` if you need installers for distribution.
 
 ## Data Storage
 - Projects are stored as JSON documents at `<user-data>/cursor-math-projects/<id>/project.json` (e.g. `~/Library/Application Support/cursor-math-proofs` on macOS, `%APPDATA%` on Windows, or `~/.config` on Linux).

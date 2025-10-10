@@ -56,6 +56,14 @@ export interface ConversationMessage {
   content: string;
 }
 
+export interface ChatThread {
+  id: string;
+  title: string;
+  messages: ConversationMessage[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ModelSpec {
   provider: string;
   model: string;
@@ -74,23 +82,6 @@ export interface Attempt {
   createdAt: string;
 }
 
-export interface LatexSettings {
-  documentClass: string;
-  packages: string[];
-  preamble: string;
-}
-
-export interface LLMSettings {
-  defaultProvider: string;
-  defaultModel: string;
-  apiKey?: string;
-}
-
-export interface Settings {
-  latex: LatexSettings;
-  llm: LLMSettings;
-}
-
 export interface Project {
   id: string;
   title: string;
@@ -105,8 +96,8 @@ export interface Project {
   conjectures: Conjecture[];
   ideas: Idea[];
   pitfalls: Pitfall[];
-  chatHistory: ConversationMessage[];
+  chatThreads: ChatThread[];
+  chatHistory?: ConversationMessage[];
   attempts: Attempt[];
   attachments: Record<string, string>[];
-  settings: Settings;
 }
