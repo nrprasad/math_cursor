@@ -262,6 +262,7 @@ export default function ProjectEditor({ projectId }: Props) {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [activeProofLemma, setActiveProofLemma] = useState<Project['lemmas'][number] | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [rawChatMessages, setRawChatMessages] = useState<Record<string, boolean>>({});
@@ -279,6 +280,7 @@ export default function ProjectEditor({ projectId }: Props) {
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
+  const [chatScrollPositions, setChatScrollPositions] = useState<Record<string, number>>({});
   const activeThread = useMemo(
     () => chatThreads.find((thread) => thread.id === activeThreadId) ?? null,
     [chatThreads, activeThreadId],
@@ -811,6 +813,7 @@ export default function ProjectEditor({ projectId }: Props) {
       setIdeas(ideasWithNames);
       setPitfalls(pitfallsWithNames);
       setChatThreads(threads);
+      setChatScrollPositions({});
       setOpenThreadIds(threads.map((thread) => thread.id));
       setActiveThreadId((current) => {
         if (current && threads.some((thread) => thread.id === current)) {
@@ -875,6 +878,18 @@ export default function ProjectEditor({ projectId }: Props) {
     setChatSuggestionIndex(0);
     setQueryText('');
   }, [activeThreadId]);
+
+  useEffect(() => {
+    if (!activeThreadId) return;
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    const saved = chatScrollPositions[activeThreadId];
+    if (typeof saved === 'number') {
+      container.scrollTop = saved;
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [activeThreadId, chatScrollPositions]);
 
   const serializedProjectSnapshot = useMemo(() => {
     const payload = buildSerializableProject();
@@ -1470,9 +1485,18 @@ export default function ProjectEditor({ projectId }: Props) {
   );
 
   useEffect(() => {
-    if (!chatEndRef.current) return;
-    chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages.length]);
+    if (!chatEndRef.current || !activeThreadId) return;
+    const container = chatScrollContainerRef.current;
+    if (!container) return;
+    const saved = chatScrollPositions[activeThreadId];
+    const isNearBottom = container.scrollHeight - container.clientHeight - container.scrollTop < 80;
+    if (typeof saved === 'number' && Math.abs(saved - container.scrollTop) > 1 && !isNearBottom) {
+      return;
+    }
+    if (isNearBottom) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [chatMessages.length, activeThreadId, chatScrollPositions]);
 
   useEffect(() => {
     setChatMessages(computeVisibleMessages(activeThreadMessages, visibleUserMessages));
@@ -2452,7 +2476,22 @@ export default function ProjectEditor({ projectId }: Props) {
           ) : null}
         </div>
         <form className="flex h-full flex-col bg-slate-950" onSubmit={(event) => event.preventDefault()}>
-          <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3 font-mono text-[15px] leading-6 text-slate-100">
+        <div
+            ref={chatScrollContainerRef}
+            className="flex-1 space-y-3 overflow-y-auto px-4 py-3 font-mono text-[15px] leading-6 text-slate-100"
+            onScroll={(event) => {
+              if (!activeThreadId) return;
+              const target = event.currentTarget;
+              setChatScrollPositions((prev) => {
+                const current = prev[activeThreadId];
+                if (current === target.scrollTop) return prev;
+                return {
+                  ...prev,
+                  [activeThreadId]: target.scrollTop,
+                };
+              });
+            }}
+          >
             {activeThread ? (
               <>
                 {hiddenUserMessages > 0 ? (
@@ -2480,6 +2519,21 @@ export default function ProjectEditor({ projectId }: Props) {
                     }}
                     onToggleRaw={(id) => {
                       setRawChatMessages((prev) => ({ ...prev, [id]: !prev[id] }));
+                    }}
+                    onEditContent={(id, content) => {
+                      if (!activeThreadId) return;
+                      updateThreadById(activeThreadId, (thread) => {
+                        const index = thread.messages.findIndex((entry) => entry.id === id);
+                        if (index === -1) return thread;
+                        const updatedMessages = thread.messages.map((entry) =>
+                          entry.id === id ? { ...entry, content } : entry,
+                        );
+                        return {
+                          ...thread,
+                          messages: updatedMessages,
+                          updatedAt: new Date().toISOString(),
+                        };
+                      });
                     }}
                   />
                 ))}
@@ -2749,7 +2803,6 @@ function ProjectMenuBar({
           { label: 'Rename Project…', shortcut: 'Ctrl/Cmd + Shift + R', action: onRename },
           { label: 'Reload Project', shortcut: 'Ctrl/Cmd + R', action: onReload },
           { label: 'Export LaTeX…', shortcut: 'Ctrl/Cmd + Shift + E', action: onExport },
-          { label: 'Draft Proof', shortcut: 'Ctrl/Cmd + D', action: onDraft },
         ],
       },
       edit: {
@@ -3029,9 +3082,17 @@ interface ChatMessageBubbleProps {
   onSelect: (id: string) => void;
   // eslint-disable-next-line no-unused-vars
   onToggleRaw: (id: string) => void;
+  onEditContent?: (id: string, content: string) => void;
 }
 
-function ChatMessageBubble({ message, isSelected, showRaw, onSelect, onToggleRaw }: ChatMessageBubbleProps) {
+function ChatMessageBubble({
+  message,
+  isSelected,
+  showRaw,
+  onSelect,
+  onToggleRaw,
+  onEditContent,
+}: ChatMessageBubbleProps) {
   const isAssistant = message.role === 'assistant';
   const bubbleClasses = [
     'relative whitespace-pre-wrap rounded px-3 py-2 transition',
@@ -3055,6 +3116,12 @@ function ChatMessageBubble({ message, isSelected, showRaw, onSelect, onToggleRaw
       console.error('Failed to copy response', error);
     }
   }, [message.content]);
+
+  const commitEdit = useCallback(() => {
+    if (!isAssistant) return;
+    if (draft === message.content) return;
+    onEditContent?.(message.id, draft);
+  }, [draft, isAssistant, message.content, message.id, onEditContent]);
 
   const content = showRaw ? (
     <span className="font-mono text-sm">{highlightLatexSource(message.content || '(empty response)')}</span>
@@ -3087,8 +3154,13 @@ function ChatMessageBubble({ message, isSelected, showRaw, onSelect, onToggleRaw
           onChange={(event) => setDraft(event.target.value)}
           onBlur={() => {
             setIsEditing(false);
-            if (draft !== message.content) {
-              message.content = draft;
+            commitEdit();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              setIsEditing(false);
+              commitEdit();
             }
           }}
           className="mt-1 w-full rounded border border-slate-600 bg-slate-900/80 p-2 text-sm text-slate-100 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
