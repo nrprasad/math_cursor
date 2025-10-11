@@ -3,26 +3,29 @@
 Electron-based desktop app for experimenting with structured math proof projects. The UI is still built with React/Tailwind, but it now runs fully inside an Electron renderer process and talks directly to the main process for persistence, proof drafting, and LaTeX export.
 
 ## Quick Install (macOS · Windows · Linux)
-1. **Install Node.js 18 or newer** (includes npm). Download from [nodejs.org](https://nodejs.org/) and follow the installer.
-2. **Download the app code**.
-   - Easiest: click the green **Code → Download ZIP** button on GitHub, then unzip it.
-   - Git users can run `git clone https://github.com/<your-org>/cursor-math-proofs-desktop.git`.
-3. **Open a terminal in the project folder** and install dependencies:
-   ```bash
-   npm install
-   ```
-4. **Launch the desktop app**:
-   ```bash
-   npm run dev
-   ```
-   A window opens automatically. Leave the terminal running; it hot-reloads changes if you edit files.
+
+Prerequisite: [Node.js 18+](https://nodejs.org/) (npm ships with Node).
+
+```bash
+# 1. Clone and enter the project
+git clone https://github.com/<your-org>/cursor-math-proofs-desktop.git
+cd cursor-math-proofs-desktop
+
+# 2. Install dependencies (run once)
+npm install
+
+# 3. Launch the desktop app (development mode)
+npm run dev
+```
+
+An Electron window opens automatically and hot-reloads while you edit files. Keep the terminal session running while you use the app.
 
 ### Want a packaged build?
 ```bash
 npm run build   # bundles the renderer into ./dist
 npm run start   # launches Electron against the bundled assets
 ```
-Wrap the build with a packager like `electron-builder` if you need installers for distribution.
+For installers (DMG/EXE/AppImage, etc.), layer a packager such as `electron-builder` or `electron-forge` on top of the build output.
 
 ## Data Storage
 - Projects are stored as JSON documents at `<user-data>/cursor-math-projects/<id>/project.json` (e.g. `~/Library/Application Support/cursor-math-proofs` on macOS, `%APPDATA%` on Windows, or `~/.config` on Linux).

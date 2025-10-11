@@ -35,6 +35,18 @@ export default function HomePage() {
     loadProjects();
   }, [loadProjects]);
 
+  useEffect(() => {
+    if (!window.desktopApi?.onAppCloseRequest) {
+      return undefined;
+    }
+    const unsubscribe = window.desktopApi.onAppCloseRequest(() => {
+      if (window.desktopApi?.respondToClose) {
+        void window.desktopApi.respondToClose(true);
+      }
+    });
+    return unsubscribe;
+  }, []);
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!projectId.trim()) {
