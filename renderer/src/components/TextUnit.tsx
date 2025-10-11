@@ -196,9 +196,11 @@ export default function TextUnit({
                 aria-expanded={expanded}
                 aria-controls={contentId}
                 onClick={toggle}
-                className="flex h-7 w-7 items-center justify-center border border-slate-600 text-sm font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
+                className="flex h-7 w-7 items-center justify-center text-base text-slate-200 transition hover:text-sky-200 focus:outline-none"
+                title="Fold/Unfold"
+                aria-label="Fold or unfold section"
               >
-                {expanded ? '-' : '+'}
+                ⇅
               </button>
             </div>
           ) : null}

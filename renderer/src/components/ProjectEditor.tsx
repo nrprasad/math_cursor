@@ -3018,6 +3018,21 @@ function ChatMessageBubble({ message, isSelected, showRaw, onSelect, onToggleRaw
     .filter(Boolean)
     .join(' ');
 
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState(message.content || '');
+
+  useEffect(() => {
+    setDraft(message.content || '');
+  }, [message.content]);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(message.content || '');
+    } catch (error) {
+      console.error('Failed to copy response', error);
+    }
+  }, [message.content]);
+
   const content = showRaw ? (
     <span className="font-mono text-sm">{highlightLatexSource(message.content || '(empty response)')}</span>
   ) : (
@@ -3043,19 +3058,62 @@ function ChatMessageBubble({ message, isSelected, showRaw, onSelect, onToggleRaw
       }}
     >
       <span className="text-slate-500">{message.role === 'user' ? '>' : '<'} </span>
-      {content}
-      {isAssistant && isSelected ? (
-        <button
-          type="button"
-          className="absolute bottom-1 right-1 rounded border border-slate-600 bg-slate-900 px-2 py-0.5 text-[11px] font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleRaw(message.id);
+      {isEditing ? (
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            setIsEditing(false);
+            if (draft !== message.content) {
+              message.content = draft;
+            }
           }}
-        >
-          {showRaw ? 'Show render' : 'Show source'}
-        </button>
-              ) : null}
+          className="mt-1 w-full rounded border border-slate-600 bg-slate-900/80 p-2 text-sm text-slate-100 focus:border-sky-400 focus:outline-none focus:ring-2 focus:ring-sky-500/40"
+          rows={Math.max(3, draft.split('\n').length)}
+        />
+      ) : (
+        content
+      )}
+      {isAssistant ? (
+        <div className="absolute bottom-1 right-1 flex items-center gap-1">
+          <button
+            type="button"
+            className="flex h-7 w-7 items-center justify-center text-[11px] text-slate-200 transition hover:text-sky-200 focus:outline-none"
+            onClick={(event) => {
+              event.stopPropagation();
+              setIsEditing((prev) => !prev);
+            }}
+            aria-label="Edit response"
+            title="Edit"
+          >
+            ✎
+          </button>
+          <button
+            type="button"
+            className="flex h-7 w-7 items-center justify-center text-[11px] text-slate-200 transition hover:text-sky-200 focus:outline-none"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleCopy();
+            }}
+            aria-label="Copy response"
+            title="Copy"
+          >
+            📄
+          </button>
+          <button
+            type="button"
+            className="flex h-7 w-7 items-center justify-center text-[11px] font-semibold text-slate-200 transition hover:text-sky-200 focus:outline-none"
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleRaw(message.id);
+            }}
+            aria-label="Toggle source"
+            title="View source"
+          >
+            {'</>'}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3098,7 +3156,9 @@ function UnitSection<T>({
           {hasItems ? (
             <button
               type="button"
-              className="border border-slate-600 px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
+              className="flex h-7 w-7 items-center justify-center text-[13px] text-slate-200 transition hover:text-sky-200 focus:outline-none"
+              title="Fold/Unfold"
+              aria-label="Fold/Unfold"
               onClick={() =>
                 setBulkAction((prev) => ({
                   version: prev.version + 1,
@@ -3106,17 +3166,19 @@ function UnitSection<T>({
                 }))
               }
             >
-              {bulkButtonLabel}
+              ⇅
             </button>
           ) : null}
           {onAdd ? (
             <button
               type="button"
-              className="border border-dashed border-slate-600 px-2.5 py-1 text-[11px] font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200 disabled:opacity-50"
+              className="flex h-7 w-7 items-center justify-center text-lg text-slate-200 transition hover:text-sky-200 disabled:opacity-50 focus:outline-none"
               onClick={onAdd}
               disabled={addDisabled}
+              title="Add"
+              aria-label="Add"
             >
-              + add
+              +
             </button>
           ) : null}
         </div>

@@ -4,7 +4,7 @@
   "abstract": "",
   "owner": "local",
   "createdAt": "2025-10-04T03:55:38.748Z",
-  "updatedAt": "2025-10-10T23:48:15.736Z",
+  "updatedAt": "2025-10-11T00:33:33.766Z",
   "notation": [
     {
       "id": "notation",
@@ -28,35 +28,7 @@
       "refs": []
     }
   ],
-  "lemmas": [
-    {
-      "id": "lemma-mgbqqfvz-bs06ppfjlyr",
-      "title": "mylemma",
-      "statementTex": "$\\alpha$",
-      "status": "draft",
-      "tags": [],
-      "dependsOn": [],
-      "proof": ""
-    },
-    {
-      "id": "lemma-mgbqril6-uufrjnrssoc",
-      "title": "whatever",
-      "statementTex": "\\[ \\mathbb{E}[x^6] \\geq (\\mathbb{E}[x^3])^2 \\]",
-      "status": "draft",
-      "tags": [],
-      "dependsOn": [],
-      "proof": "\\begin{proof}[Proof of Lemma~\\ref{lem:two} using Lemma~\\ref{lem:cs}]\nApply Cauchy--Schwarz (Lemma~\\ref{lem:cs}) with $U = X^3$ and $V = 1$ (the constant random variable). Then\n\\[\n\\bigl|\\mathbb{E}[X^3]\\bigr|\n= \\bigl|\\mathbb{E}[UV]\\bigr|\n\\le \\bigl(\\mathbb{E}[U^2]\\bigr)^{1/2}\\bigl(\\mathbb{E}[V^2]\\bigr)^{1/2}\n= \\bigl(\\mathbb{E}[X^6]\\bigr)^{1/2}\\bigl(\\mathbb{E}[1]\\bigr)^{1/2}.\n\\]\nSince $\\mathbb{E}[1]=1$ under a probability measure, we obtain\n\\[\n\\bigl|\\mathbb{E}[X^3]\\bigr| \\le \\bigl(\\mathbb{E}[X^6]\\bigr)^{1/2}.\n\\]\nSquaring both sides yields\n\\[\n\\bigl(\\mathbb{E}[X^3]\\bigr)^2 \\le \\mathbb{E}[X^6],\n\\]\nas claimed.\n\\end{proof}"
-    },
-    {
-      "id": "lemma-mgbtlogo-e2qebeg3q87",
-      "title": "Cauchy Schwartz",
-      "statementTex": "$\\mathbb{E}[xy] \\leq \\mathbb{E}[x^2]^{1/2} \\cdot \\mathbb{E}[y^2]^{1/2}$",
-      "status": "draft",
-      "tags": [],
-      "dependsOn": [],
-      "proof": "This is my proof\nsdfs\nfsdfs\nfsdfs\nfsdfs\nfsfds\nfsdfs\nfsdfs\nfsfdsdf\nsdfsdfs\ndfsdfs\nfs\nfdsdfs\nfs\nfds\ndfs\nfs\ndf\nsfds\nfs\nfs\nfs\ndfsdfsfsdfs\nfs\nfs\ndfs\nfsdfdsf\nsdfsf\nsdfs"
-    }
-  ],
+  "lemmas": [],
   "conjectures": [
     {
       "id": "conjecture-mgcypky1-9x336p3tosq",
