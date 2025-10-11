@@ -11,14 +11,16 @@ Prerequisite: [Node.js 18+](https://nodejs.org/) (npm ships with Node).
 git clone https://github.com/<your-org>/cursor-math-proofs-desktop.git
 cd cursor-math-proofs-desktop
 
-# 2. Install dependencies (run once)
-npm install
+# 2. Run the cross-platform setup script (installs dependencies & build)
+./scripts/setup.sh
 
-# 3. Launch the desktop app (development mode)
-npm run dev
+# 3. Launch the packaged desktop app
+npm run start
 ```
 
-An Electron window opens automatically and hot-reloads while you edit files. Keep the terminal session running while you use the app.
+The setup script works on macOS, Linux, and WSL (it only needs Node.js). After the build completes, `npm run start` launches Electron pointing at the bundled assets.
+
+Need live-reload while hacking? Skip the setup script and run `npm install` followed by `npm run dev` to start the Vite + Electron development loop.
 
 ### Want a packaged build?
 ```bash
