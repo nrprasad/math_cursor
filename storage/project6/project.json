@@ -4,7 +4,7 @@
   "abstract": "",
   "owner": "local",
   "createdAt": "2025-10-04T03:55:38.748Z",
-  "updatedAt": "2025-10-11T00:33:33.766Z",
+  "updatedAt": "2025-10-11T17:39:47.697Z",
   "notation": [
     {
       "id": "notation",
@@ -28,7 +28,26 @@
       "refs": []
     }
   ],
-  "lemmas": [],
+  "lemmas": [
+    {
+      "id": "lemma-mglty8n3-v8jr0pu0xsm",
+      "title": "test",
+      "statementTex": "Statement of lemma,Statement of lemma,Statement of lemma,Statement of lemma,Statement of lemma,Statement of lemma,Statement of lemma,\n$$ \\alpha + \\sum_{i=1}^n \\frac{1}{n} = \\log n $$\n\n$$ \\alpha + \\sum_{i=1}^n \\frac{1}{n^2} = \\frac{\\pi^2}{6} $$\n$$ \\alpha + \\left(\\sum_{i=1}^n \\frac{1}{n}\\right) = \\log n $$",
+      "status": "draft",
+      "tags": [],
+      "dependsOn": [],
+      "proof": "This is a test. This is a test. This is a test.This is a test.This is a test.This is a test.This is a test.This is a test.This is a test.This is a test.This is a test.This is a test.\n\n$$ \\alpha + \\sum_{i=1}^n \\frac{1}{n} = \\log n $$\n\n$$ \\alpha + \\sum_{i=1}^n \\frac{1}{n^2} = \\frac{\\pi^2}{6} $$\n$$ \\alpha + \\left(\\sum_{i=1}^n \\frac{1}{n}\\right) = \\log n $$"
+    },
+    {
+      "id": "lemma-mgludhfs-lbalduzkdse",
+      "title": "test2",
+      "statementTex": "Statement of lemma. Statement of lemma. Statement of lemma. Statement of lemma. Statement of lemma. Statement of lemma. Statement of lemma.",
+      "status": "draft",
+      "tags": [],
+      "dependsOn": [],
+      "proof": ""
+    }
+  ],
   "conjectures": [
     {
       "id": "conjecture-mgcypky1-9x336p3tosq",
@@ -170,6 +189,20 @@
       ],
       "createdAt": "2025-10-10T23:27:39.175Z",
       "updatedAt": "2025-10-10T23:28:06.765Z"
+    },
+    {
+      "id": "thread-mgmk0o47-bgyd4lqygaa",
+      "title": "Thread #6",
+      "messages": [],
+      "createdAt": "2025-10-11T17:33:26.934Z",
+      "updatedAt": "2025-10-11T17:33:26.934Z"
+    },
+    {
+      "id": "thread-mgmk69ae-odv8158tpy",
+      "title": "Thread #7",
+      "messages": [],
+      "createdAt": "2025-10-11T17:37:47.653Z",
+      "updatedAt": "2025-10-11T17:37:47.653Z"
     }
   ]
 }

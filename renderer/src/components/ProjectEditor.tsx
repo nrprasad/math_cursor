@@ -237,6 +237,25 @@ const TERTIARY_BUTTON_CLASS =
   'inline-flex items-center justify-center border border-slate-600 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:border-sky-400 hover:text-sky-200';
 const DEFAULT_PROJECT_TITLE = 'Untitled project';
 
+type LeftPanelSection =
+  | 'notation'
+  | 'definitions'
+  | 'lemmas'
+  | 'facts'
+  | 'conjectures'
+  | 'ideas'
+  | 'pitfalls';
+
+const LEFT_PANEL_SECTIONS: { id: LeftPanelSection; label: string; shortLabel: string }[] = [
+  { id: 'notation', label: 'Notation', shortLabel: 'Notn.' },
+  { id: 'definitions', label: 'Definitions', shortLabel: 'Defn.' },
+  { id: 'lemmas', label: 'Lemmas', shortLabel: 'Lemm.' },
+  { id: 'facts', label: 'Facts', shortLabel: 'Facts' },
+  { id: 'conjectures', label: 'Conjectures', shortLabel: 'Conj.' },
+  { id: 'ideas', label: 'Ideas', shortLabel: 'Ideas' },
+  { id: 'pitfalls', label: 'Pitfalls', shortLabel: 'Pitf.' },
+];
+
 export default function ProjectEditor({ projectId }: Props) {
   const [project, setProject] = useState<Project | null>(null);
   const [titleDraft, setTitleDraft] = useState('');
@@ -255,6 +274,8 @@ export default function ProjectEditor({ projectId }: Props) {
   const [conjectures, setConjectures] = useState<Project["conjectures"]>([]);
   const [ideas, setIdeas] = useState<Project["ideas"]>([]);
   const [pitfalls, setPitfalls] = useState<Project["pitfalls"]>([]);
+  const [openProofLemmaIds, setOpenProofLemmaIds] = useState<Record<string, boolean>>({});
+  const [activeLeftSection, setActiveLeftSection] = useState<LeftPanelSection>('notation');
 
   const [queryText, setQueryText] = useState("");
   const [chatThreads, setChatThreads] = useState<Project['chatThreads']>([]);
@@ -263,7 +284,7 @@ export default function ProjectEditor({ projectId }: Props) {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatScrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const [activeProofLemma, setActiveProofLemma] = useState<Project['lemmas'][number] | null>(null);
+  const chatPaneRef = useRef<HTMLDivElement | null>(null);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [rawChatMessages, setRawChatMessages] = useState<Record<string, boolean>>({});
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -293,6 +314,7 @@ export default function ProjectEditor({ projectId }: Props) {
   const hiddenUserMessages = Math.max(0, totalUserMessages - visibleUserMessages);
 
   const updateThreads = useCallback(
+    // eslint-disable-next-line no-unused-vars
     (mutator: (threads: ChatThread[]) => ChatThread[]) => {
       setChatThreads((prev) => {
         const next = mutator(prev);
@@ -307,6 +329,7 @@ export default function ProjectEditor({ projectId }: Props) {
   );
 
   const updateThreadById = useCallback(
+    // eslint-disable-next-line no-unused-vars
     (threadId: string, mutator: (thread: ChatThread) => ChatThread | null) => {
       updateThreads((prev) => {
         let changed = false;
@@ -433,6 +456,7 @@ export default function ProjectEditor({ projectId }: Props) {
   ]);
 
   const snapshotFromProject = useCallback((proj: Project) => {
+    // eslint-disable-next-line no-unused-vars
     const { updatedAt, ...rest } = proj;
     return JSON.stringify(rest);
   }, []);
@@ -630,7 +654,7 @@ export default function ProjectEditor({ projectId }: Props) {
     setEditingPitfall(null);
     setPitfallEditName("");
     setPitfallEditDescription("");
-    setActiveProofLemma(null);
+    setOpenProofLemmaIds({});
   }, []);
 
   const handleDeleteLemma = (id: string) => {
@@ -646,13 +670,16 @@ export default function ProjectEditor({ projectId }: Props) {
       setLemmaEditTitle("");
       setLemmaEditBody("");
     }
-    if (activeProofLemma?.id === id) {
-      setActiveProofLemma(null);
-    }
     if (proofEditLemmaId === id) {
       setProofEditLemmaId(null);
       setProofDraft('');
     }
+    setOpenProofLemmaIds((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   };
 
   const handleDeleteDefinition = (id: string) => {
@@ -827,7 +854,6 @@ export default function ProjectEditor({ projectId }: Props) {
       setRawChatMessages({});
       setSelectedChatId(null);
       setSelectedLemmaId(lemmasWithNames[0]?.id ?? "");
-      setActiveProofLemma(null);
       setQueryText("");
       closeAllEditors();
       setDraft(null);
@@ -894,6 +920,7 @@ export default function ProjectEditor({ projectId }: Props) {
   const serializedProjectSnapshot = useMemo(() => {
     const payload = buildSerializableProject();
     if (!payload) return null;
+    // eslint-disable-next-line no-unused-vars
     const { updatedAt, ...rest } = payload;
     return JSON.stringify(rest);
   }, [buildSerializableProject]);
@@ -1082,58 +1109,22 @@ export default function ProjectEditor({ projectId }: Props) {
     }
   }, [project, exportLatex]);
 
-  const handleShowProof = useCallback((lemma: Project['lemmas'][number]) => {
-    setSelectedLemmaId(lemma.id);
-    setProofEditLemmaId(null);
-    setProofDraft('');
-    setActiveProofLemma(lemma);
-  }, []);
-
-  const handleGenerateProof = useCallback(
-    (lemma: Project['lemmas'][number]) => {
-      const targetThread = activeThread;
-      if (!targetThread) {
-        return;
-      }
-      const statement = lemma.statementTex?.trim() || lemma.title?.trim() || lemma.id || '';
-      const message = statement
-        ? `Generate proof for Lemma: ${statement}`
-        : 'Generate proof for the selected lemma.';
-      const entry: ChatMessage = { id: createId('chat-user'), role: 'user', content: message };
-      const timestamp = new Date().toISOString();
-      updateThreadById(targetThread.id, (thread) => ({
-        ...thread,
-        messages: [...thread.messages, entry],
-        updatedAt: timestamp,
-      }));
-      setSelectedLemmaId(lemma.id);
-      setProofEditLemmaId(null);
-      setProofDraft('');
-    },
-    [activeThread, updateThreadById],
-  );
-
   const handleSaveProof = useCallback(
     (lemmaId: string, proof: string) => {
-      setLemmas((prev) => {
-        const next = prev.map((lemma) =>
+      setLemmas((prev) =>
+        prev.map((lemma) =>
           lemma.id === lemmaId
             ? {
                 ...lemma,
                 proof,
               }
             : lemma,
-        );
-        const updatedLemma = next.find((lemma) => lemma.id === lemmaId) ?? null;
-        if (updatedLemma && activeProofLemma?.id === lemmaId) {
-          setActiveProofLemma(updatedLemma);
-        }
-        return next;
-      });
+        ),
+      );
       setProofEditLemmaId(null);
       setProofDraft('');
     },
-    [activeProofLemma],
+    [],
   );
 
   const updateChatSuggestions = useCallback(
@@ -1511,16 +1502,6 @@ export default function ProjectEditor({ projectId }: Props) {
   }, [chatSuggestionIndex, chatSuggestions]);
 
   useEffect(() => {
-    if (!activeProofLemma) return;
-    const latest = lemmas.find((lemma) => lemma.id === activeProofLemma.id);
-    if (!latest) {
-      setActiveProofLemma(null);
-    } else if (latest !== activeProofLemma) {
-      setActiveProofLemma(latest);
-    }
-  }, [activeProofLemma, lemmas]);
-
-  useEffect(() => {
     if (!window.desktopApi || typeof window.desktopApi.onMenu !== 'function') {
       return undefined;
     }
@@ -1586,6 +1567,31 @@ export default function ProjectEditor({ projectId }: Props) {
   }, [handleRenameProject, chatThreads, activeThreadId]);
 
   useEffect(() => {
+    const handleChatPaneShortcuts = (event: KeyboardEvent) => {
+      if (!chatPaneRef.current) return;
+      const target = event.target as Node | null;
+      if (!target || !chatPaneRef.current.contains(target)) return;
+      if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {
+        return;
+      }
+      const key = event.key.toLowerCase();
+      if (key === 't') {
+        event.preventDefault();
+        handleCreateThread();
+      } else if (key === 'w') {
+        if (!activeThreadId) return;
+        event.preventDefault();
+        handleCloseThread(activeThreadId);
+      }
+    };
+
+    window.addEventListener('keydown', handleChatPaneShortcuts);
+    return () => {
+      window.removeEventListener('keydown', handleChatPaneShortcuts);
+    };
+  }, [handleCreateThread, handleCloseThread, activeThreadId]);
+
+  useEffect(() => {
     if (!window.desktopApi?.onAppCloseRequest) {
       return undefined;
     }
@@ -1622,724 +1628,807 @@ export default function ProjectEditor({ projectId }: Props) {
     );
   }
 
-  const leftPane = (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <div className="flex-1 min-h-0 space-y-4 overflow-y-auto pr-1">
-        <NotationEditor value={notationText} onChange={setNotationText} />
+  const notationSection = <NotationEditor value={notationText} onChange={setNotationText} />;
 
-        <UnitSection
-          title="Definitions"
-          items={definitions}
-          emptyMessage="No definitions yet."
-          getKey={(definition) => definition.id}
-          onAdd={() => {
-            setNewDefinitionTitle("");
-            setNewDefinitionBody("");
-            setShowDefinitionForm(true);
-          }}
-          addDisabled={showDefinitionForm}
-          renderItem={(definition, index, bulkAction) => {
-            if (editingDefinition?.id === definition.id) {
-              return (
-                <AddItemForm
-                  titleLabel="Definition name"
-                  bodyLabel="Definition statement (LaTeX allowed)"
-                  titleValue={definitionEditTitle}
-                  bodyValue={definitionEditBody}
-                  onTitleChange={setDefinitionEditTitle}
-                  onBodyChange={setDefinitionEditBody}
-                  onCancel={() => {
-                    setEditingDefinition(null);
-                    setDefinitionEditTitle("");
-                    setDefinitionEditBody("");
-                  }}
-                  onSubmit={() => {
-                    if (!definitionEditTitle.trim() || !definitionEditBody.trim()) return;
-                    const id = editingDefinition?.id;
-                    if (!id) return;
-                    setDefinitions((prev) =>
-                      prev.map((item) =>
-                        item.id === id
-                          ? {
-                              ...item,
-                              title: definitionEditTitle.trim(),
-                              statementTex: definitionEditBody.trim(),
-                            }
-                          : item,
-                      ),
-                    );
-                    setEditingDefinition(null);
-                    setDefinitionEditTitle("");
-                    setDefinitionEditBody("");
-                  }}
-                  submitLabel="Save Definition"
-                  canSubmit={Boolean(definitionEditTitle.trim() && definitionEditBody.trim())}
-                />
-              );
-            }
-            return (
-              <TextUnit
-                className="rounded border border-transparent bg-slate-900/30 p-3"
-                heading={formatUnitHeading("Definition", index, definition.title)}
-                body={getDefinitionBody(definition)}
-                bulkAction={bulkAction}
-                renderControls={() => (
-                  <ItemControls
-                    editLabel="Edit definition"
-                    deleteLabel="Delete definition"
-                    onEdit={() => {
-                      setEditingDefinition({ id: definition.id });
-                      setDefinitionEditTitle(definition.title?.trim() || "");
-                      setDefinitionEditBody(definition.statementTex?.trim() || "");
-                    }}
-                    onDelete={() => handleDeleteDefinition(definition.id)}
-                  />
-                )}
-              />
-            );
-          }}
-        >
-          {showDefinitionForm ? (
+  const definitionsSection = (
+    <UnitSection
+      title="Definitions"
+      items={definitions}
+      emptyMessage="No definitions yet."
+      getKey={(definition) => definition.id}
+      onAdd={() => {
+        setNewDefinitionTitle('');
+        setNewDefinitionBody('');
+        setShowDefinitionForm(true);
+      }}
+      addDisabled={showDefinitionForm}
+      renderItem={(definition, index, bulkAction) => {
+        if (editingDefinition?.id === definition.id) {
+          return (
             <AddItemForm
               titleLabel="Definition name"
               bodyLabel="Definition statement (LaTeX allowed)"
-              titleValue={newDefinitionTitle}
-              bodyValue={newDefinitionBody}
-              onTitleChange={setNewDefinitionTitle}
-              onBodyChange={setNewDefinitionBody}
+              titleValue={definitionEditTitle}
+              bodyValue={definitionEditBody}
+              onTitleChange={setDefinitionEditTitle}
+              onBodyChange={setDefinitionEditBody}
               onCancel={() => {
-                setShowDefinitionForm(false);
-                setNewDefinitionTitle("");
-                setNewDefinitionBody("");
+                setEditingDefinition(null);
+                setDefinitionEditTitle('');
+                setDefinitionEditBody('');
               }}
               onSubmit={() => {
-                if (!newDefinitionTitle.trim() || !newDefinitionBody.trim()) return;
-                const definition = {
-                  id: createId("definition"),
-                  title: newDefinitionTitle.trim(),
-                  statementTex: newDefinitionBody.trim(),
-                  tags: [],
-                };
-                setDefinitions((prev) => [...prev, definition]);
-                setShowDefinitionForm(false);
-                setNewDefinitionTitle("");
-                setNewDefinitionBody("");
+                if (!definitionEditTitle.trim() || !definitionEditBody.trim()) return;
+                const id = editingDefinition?.id;
+                if (!id) return;
+                setDefinitions((prev) =>
+                  prev.map((item) =>
+                    item.id === id
+                      ? {
+                          ...item,
+                          title: definitionEditTitle.trim(),
+                          statementTex: definitionEditBody.trim(),
+                        }
+                      : item,
+                  ),
+                );
+                setEditingDefinition(null);
+                setDefinitionEditTitle('');
+                setDefinitionEditBody('');
               }}
-              submitLabel="Add Definition"
-              canSubmit={Boolean(newDefinitionTitle.trim() && newDefinitionBody.trim())}
+              submitLabel="Save Definition"
+              canSubmit={Boolean(definitionEditTitle.trim() && definitionEditBody.trim())}
             />
-          ) : null}
-        </UnitSection>
-
-        <UnitSection
-          title="Lemmas"
-          items={lemmas}
-          emptyMessage="No lemmas yet."
-          getKey={(lemma) => lemma.id}
-          onAdd={() => {
-            setNewLemmaTitle("");
-            setNewLemmaBody("");
-            setShowLemmaForm(true);
-          }}
-          addDisabled={showLemmaForm}
-          renderItem={(lemma, index, bulkAction) => {
-            if (editingLemma?.id === lemma.id) {
-              return (
-                <AddItemForm
-                  titleLabel="Lemma name"
-                  bodyLabel="Lemma statement (LaTeX allowed)"
-                  titleValue={lemmaEditTitle}
-                  bodyValue={lemmaEditBody}
-                  onTitleChange={setLemmaEditTitle}
-                  onBodyChange={setLemmaEditBody}
-                  onCancel={() => {
-                    setEditingLemma(null);
-                    setLemmaEditTitle("");
-                    setLemmaEditBody("");
-                  }}
-                  onSubmit={() => {
-                    if (!lemmaEditTitle.trim() || !lemmaEditBody.trim()) return;
-                    const id = editingLemma?.id;
-                    if (!id) return;
-                    setLemmas((prev) =>
-                      prev.map((item) =>
-                        item.id === id
-                          ? {
-                              ...item,
-                              title: lemmaEditTitle.trim(),
-                              statementTex: lemmaEditBody.trim(),
-                            }
-                          : item,
-                      ),
-                    );
-                    setEditingLemma(null);
-                    setLemmaEditTitle("");
-                    setLemmaEditBody("");
-                  }}
-                  submitLabel="Save Lemma"
-                  canSubmit={Boolean(lemmaEditTitle.trim() && lemmaEditBody.trim())}
-                />
-              );
-            }
-          const isSelected = selectedLemmaId === lemma.id;
-          const hasProof = Boolean(lemma.proof?.trim());
-          const isProofEditing = proofEditLemmaId === lemma.id;
-          const proofButtonLabel = hasProof ? 'Show proof' : 'Generate proof';
-          return (
-            <div
-              onMouseDown={() => setSelectedLemmaId(lemma.id)}
-              onClick={() => setSelectedLemmaId(lemma.id)}
-              className="cursor-pointer"
-            >
+          );
+        }
+            return (
               <TextUnit
-                className={`rounded border border-transparent bg-slate-900/30 p-3 transition-colors ${
-                  isSelected ? 'border-sky-500/60 bg-slate-900/60' : ''
-                }`}
-                heading={formatUnitHeading("Lemma", index, lemma.title)}
-                body={getLemmaBody(lemma)}
+                className="rounded border border-transparent bg-slate-900/30 pl-3 pr-0 py-3"
+                heading={formatUnitHeading('Definition', index, definition.title)}
+                body={getDefinitionBody(definition)}
                 bulkAction={bulkAction}
-                renderControls={() => (
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      className={TERTIARY_BUTTON_CLASS}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setSelectedLemmaId(lemma.id);
-                        if (isProofEditing) {
-                          setProofEditLemmaId(null);
-                          setProofDraft('');
-                        } else {
-                          setProofEditLemmaId(lemma.id);
-                          setProofDraft(lemma.proof?.trim() || '');
-                        }
-                      }}
-                    >
-                      +proof
-                    </button>
-                    <button
-                      type="button"
-                      className={TERTIARY_BUTTON_CLASS}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        if (hasProof) {
-                          handleShowProof(lemma);
-                        } else {
-                          handleGenerateProof(lemma);
-                        }
-                      }}
-                    >
-                      {proofButtonLabel}
-                    </button>
-                    <ItemControls
-                      editLabel="Edit lemma"
-                      deleteLabel="Delete lemma"
-                      onEdit={() => {
-                        setSelectedLemmaId(lemma.id);
-                        setProofEditLemmaId(null);
-                        setProofDraft('');
-                        setEditingLemma({ id: lemma.id });
-                        setLemmaEditTitle(lemma.title?.trim() || "");
-                        setLemmaEditBody(lemma.statementTex?.trim() || "");
-                      }}
-                      onDelete={() => handleDeleteLemma(lemma.id)}
-                    />
-                  </div>
-                )}
+            renderControls={() => (
+              <ItemControls
+                editLabel="Edit definition"
+                deleteLabel="Delete definition"
+                onEdit={() => {
+                  setEditingDefinition({ id: definition.id });
+                  setDefinitionEditTitle(definition.title?.trim() || '');
+                  setDefinitionEditBody(definition.statementTex?.trim() || '');
+                }}
+                onDelete={() => handleDeleteDefinition(definition.id)}
               />
-              {isProofEditing ? (
-                <form
-                  className="mt-3 space-y-3 rounded border border-slate-800 bg-slate-950/80 p-3"
-                  onSubmit={(event) => {
-                    event.preventDefault();
-                    handleSaveProof(lemma.id, proofDraft.trim());
-                  }}
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <label className="block space-y-2">
-                    <span className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-300">Proof (LaTeX allowed)</span>
-                    <textarea
-                      className={`${TEXTAREA_CLASS} h-32`}
-                      value={proofDraft}
-                      onChange={(event) => setProofDraft(event.target.value)}
-                      placeholder="\\begin{proof} ..."
-                    />
-                  </label>
-                  <div className="flex justify-end gap-2">
-                    <button
-                      type="button"
-                      className={SECONDARY_BUTTON_CLASS}
-                      onClick={() => {
-                        setProofEditLemmaId(null);
-                        setProofDraft('');
-                      }}
-                    >
-                      Cancel
-                    </button>
-                    <button type="submit" className={PRIMARY_BUTTON_CLASS} disabled={!proofDraft.trim()}>
-                      Save Proof
-                    </button>
-                  </div>
-                </form>
-              ) : null}
-            </div>
-          );
-        }}
-      >
-        {showLemmaForm ? (
-          <AddItemForm
-            titleLabel="Lemma name"
-            bodyLabel="Lemma statement (LaTeX allowed)"
-            titleValue={newLemmaTitle}
-            bodyValue={newLemmaBody}
-            onTitleChange={setNewLemmaTitle}
-            onBodyChange={setNewLemmaBody}
-            onCancel={() => {
-              setShowLemmaForm(false);
-              setNewLemmaTitle("");
-              setNewLemmaBody("");
-            }}
-            onSubmit={() => {
-              if (!newLemmaTitle.trim() || !newLemmaBody.trim()) return;
-              const lemma = {
-                id: createId("lemma"),
-                title: newLemmaTitle.trim(),
-                statementTex: newLemmaBody.trim(),
-                status: "draft" as const,
-                tags: [],
-                dependsOn: [],
-                proof: '',
-              };
-              setLemmas((prev) => [...prev, lemma]);
-              setSelectedLemmaId(lemma.id);
-              setShowLemmaForm(false);
-              setNewLemmaTitle("");
-              setNewLemmaBody("");
-            }}
-            canSubmit={Boolean(newLemmaTitle.trim() && newLemmaBody.trim())}
-            submitLabel="Add Lemma"
+            )}
           />
-        ) : null}
-      </UnitSection>
-
-        <UnitSection
-        title="Facts"
-        items={facts}
-        emptyMessage="No facts yet."
-        getKey={(fact) => fact.id}
-        onAdd={() => {
-          setNewFactTitle("");
-          setNewFactBody("");
-          setShowFactForm(true);
-        }}
-        addDisabled={showFactForm}
-        renderItem={(fact, index, bulkAction) => {
-          if (editingFact?.id === fact.id) {
-            return (
-              <AddItemForm
-                titleLabel="Fact name"
-                bodyLabel="Fact statement (LaTeX allowed)"
-                titleValue={factEditTitle}
-                bodyValue={factEditBody}
-                onTitleChange={setFactEditTitle}
-                onBodyChange={setFactEditBody}
-                onCancel={() => {
-                  setEditingFact(null);
-                  setFactEditTitle("");
-                  setFactEditBody("");
-                }}
-                onSubmit={() => {
-                  if (!factEditTitle.trim() || !factEditBody.trim()) return;
-                  const id = editingFact?.id;
-                  if (!id) return;
-                  setFacts((prev) =>
-                    prev.map((item) =>
-                      item.id === id
-                        ? {
-                            ...item,
-                            title: factEditTitle.trim(),
-                            statementTex: factEditBody.trim(),
-                          }
-                        : item,
-                    ),
-                  );
-                  setEditingFact(null);
-                  setFactEditTitle("");
-                  setFactEditBody("");
-                }}
-                submitLabel="Save Fact"
-                canSubmit={Boolean(factEditTitle.trim() && factEditBody.trim())}
-              />
-            );
-          }
-          return (
-            <TextUnit
-              heading={formatUnitHeading("Fact", index, fact.title)}
-              body={getFactBody(fact)}
-              bulkAction={bulkAction}
-              renderControls={() => (
-                <ItemControls
-                  editLabel="Edit fact"
-                  deleteLabel="Delete fact"
-                  onEdit={() => {
-                    setEditingFact({ id: fact.id });
-                    setFactEditTitle(fact.title?.trim() || "");
-                    setFactEditBody(fact.statementTex?.trim() || "");
-                  }}
-                  onDelete={() => handleDeleteFact(fact.id)}
-                />
-              )}
-            />
-          );
-        }}
-      >
-        {showFactForm ? (
-          <AddItemForm
-            titleLabel="Fact name"
-            bodyLabel="Fact statement (LaTeX allowed)"
-            titleValue={newFactTitle}
-            bodyValue={newFactBody}
-            onTitleChange={setNewFactTitle}
-            onBodyChange={setNewFactBody}
-            onCancel={() => {
-              setShowFactForm(false);
-              setNewFactTitle("");
-              setNewFactBody("");
-            }}
-            onSubmit={() => {
-              if (!newFactTitle.trim() || !newFactBody.trim()) return;
-              const fact = {
-                id: createId("fact"),
-                title: newFactTitle.trim(),
-                statementTex: newFactBody.trim(),
-                tags: [],
-                refs: [],
-              };
-              setFacts((prev) => [...prev, fact]);
-              setShowFactForm(false);
-              setNewFactTitle("");
-              setNewFactBody("");
-            }}
-            canSubmit={Boolean(newFactTitle.trim() && newFactBody.trim())}
-            submitLabel="Add Fact"
-          />
-        ) : null}
-      </UnitSection>
-
-        <UnitSection
-        title="Conjectures"
-        items={conjectures}
-        emptyMessage="No conjectures yet."
-        getKey={(conjecture) => conjecture.id}
-        onAdd={() => {
-          setNewConjectureTitle("");
-          setNewConjectureBody("");
-          setShowConjectureForm(true);
-        }}
-        addDisabled={showConjectureForm}
-        renderItem={(conjecture, index, bulkAction) => {
-          if (editingConjecture?.id === conjecture.id) {
-            return (
-              <AddItemForm
-                titleLabel="Conjecture name"
-                bodyLabel="Conjecture statement (LaTeX allowed)"
-                titleValue={conjectureEditTitle}
-                bodyValue={conjectureEditBody}
-                onTitleChange={setConjectureEditTitle}
-                onBodyChange={setConjectureEditBody}
-                onCancel={() => {
-                  setEditingConjecture(null);
-                  setConjectureEditTitle("");
-                  setConjectureEditBody("");
-                }}
-                onSubmit={() => {
-                  if (!conjectureEditTitle.trim() || !conjectureEditBody.trim()) return;
-                  const id = editingConjecture?.id;
-                  if (!id) return;
-                  setConjectures((prev) =>
-                    prev.map((item) =>
-                      item.id === id
-                        ? {
-                            ...item,
-                            title: conjectureEditTitle.trim(),
-                            statementTex: conjectureEditBody.trim(),
-                          }
-                        : item,
-                    ),
-                  );
-                  setEditingConjecture(null);
-                  setConjectureEditTitle("");
-                  setConjectureEditBody("");
-                }}
-                submitLabel="Save Conjecture"
-                canSubmit={Boolean(conjectureEditTitle.trim() && conjectureEditBody.trim())}
-              />
-            );
-          }
-          return (
-            <TextUnit
-              heading={formatUnitHeading("Conjecture", index, conjecture.title)}
-              body={getConjectureBody(conjecture)}
-              bulkAction={bulkAction}
-              renderControls={() => (
-                <ItemControls
-                  editLabel="Edit conjecture"
-                  deleteLabel="Delete conjecture"
-                  onEdit={() => {
-                    setEditingConjecture({ id: conjecture.id });
-                    setConjectureEditTitle(conjecture.title?.trim() || "");
-                    setConjectureEditBody(conjecture.statementTex?.trim() || "");
-                  }}
-                  onDelete={() => handleDeleteConjecture(conjecture.id)}
-                />
-              )}
-            />
-          );
-        }}
-      >
-        {showConjectureForm ? (
-          <AddItemForm
-            titleLabel="Conjecture name"
-            bodyLabel="Conjecture statement (LaTeX allowed)"
-            titleValue={newConjectureTitle}
-            bodyValue={newConjectureBody}
-            onTitleChange={setNewConjectureTitle}
-            onBodyChange={setNewConjectureBody}
-            onCancel={() => {
-              setShowConjectureForm(false);
-              setNewConjectureTitle("");
-              setNewConjectureBody("");
-            }}
-            onSubmit={() => {
-              if (!newConjectureTitle.trim() || !newConjectureBody.trim()) return;
-              const conjecture = {
-                id: createId("conjecture"),
-                title: newConjectureTitle.trim(),
-                statementTex: newConjectureBody.trim(),
-                evidence: "",
-              };
-              setConjectures((prev) => [...prev, conjecture]);
-              setShowConjectureForm(false);
-              setNewConjectureTitle("");
-              setNewConjectureBody("");
-            }}
-            canSubmit={Boolean(newConjectureTitle.trim() && newConjectureBody.trim())}
-            submitLabel="Add Conjecture"
-          />
-        ) : null}
-      </UnitSection>
-
-        <UnitSection
-        title="Ideas"
-        items={ideas}
-        emptyMessage="No ideas yet."
-        getKey={(idea) => idea.id}
-        onAdd={() => {
-          setNewIdeaName("");
-          setNewIdeaDescription("");
-          setShowIdeaForm(true);
-        }}
-        addDisabled={showIdeaForm}
-        renderItem={(idea, index, bulkAction) => {
-          if (editingIdea?.id === idea.id) {
-            return (
-              <AddItemForm
-                titleLabel="Idea name"
-                bodyLabel="Idea description"
-                titleValue={ideaEditName}
-                bodyValue={ideaEditDescription}
-                onTitleChange={setIdeaEditName}
-                onBodyChange={setIdeaEditDescription}
-                onCancel={() => {
-                  setEditingIdea(null);
-                  setIdeaEditName("");
-                  setIdeaEditDescription("");
-                }}
-                onSubmit={() => {
-                  if (!ideaEditName.trim() || !ideaEditDescription.trim()) return;
-                  const id = editingIdea?.id;
-                  if (!id) return;
-                  setIdeas((prev) =>
-                    prev.map((item) =>
-                      item.id === id
-                        ? {
-                            ...item,
-                            name: ideaEditName.trim(),
-                            description: ideaEditDescription.trim(),
-                          }
-                        : item,
-                    ),
-                  );
-                  setEditingIdea(null);
-                  setIdeaEditName("");
-                  setIdeaEditDescription("");
-                }}
-                submitLabel="Save Idea"
-                canSubmit={Boolean(ideaEditName.trim() && ideaEditDescription.trim())}
-              />
-            );
-          }
-          return (
-            <TextUnit
-              heading={formatUnitHeading("Idea", index, idea.name)}
-              body={getIdeaBody(idea)}
-              bulkAction={bulkAction}
-              renderControls={() => (
-                <ItemControls
-                  editLabel="Edit idea"
-                  deleteLabel="Delete idea"
-                  onEdit={() => {
-                    setEditingIdea({ id: idea.id });
-                    setIdeaEditName(idea.name?.trim() || "");
-                    setIdeaEditDescription(idea.description?.trim() || "");
-                  }}
-                  onDelete={() => handleDeleteIdea(idea.id)}
-                />
-              )}
-            />
-          );
-        }}
-      >
-        {showIdeaForm ? (
-          <AddItemForm
-            titleLabel="Idea name"
-            bodyLabel="Idea description"
-            titleValue={newIdeaName}
-            bodyValue={newIdeaDescription}
-            onTitleChange={setNewIdeaName}
-            onBodyChange={setNewIdeaDescription}
-            onCancel={() => {
-              setShowIdeaForm(false);
-              setNewIdeaName("");
-              setNewIdeaDescription("");
-            }}
-            onSubmit={() => {
-              if (!newIdeaName.trim() || !newIdeaDescription.trim()) return;
-              const idea = {
-                id: createId("idea"),
-                name: newIdeaName.trim(),
-                description: newIdeaDescription.trim(),
-                checklist: [],
-                antiPatterns: [],
-              };
-              setIdeas((prev) => [...prev, idea]);
-              setShowIdeaForm(false);
-              setNewIdeaName("");
-              setNewIdeaDescription("");
-            }}
-            canSubmit={Boolean(newIdeaName.trim() && newIdeaDescription.trim())}
-            submitLabel="Add Idea"
-          />
-        ) : null}
-      </UnitSection>
-
-        <UnitSection
-          title="Pitfalls"
-          items={pitfalls}
-          emptyMessage="No pitfalls yet."
-          getKey={(pitfall) => pitfall.id}
-          onAdd={() => {
-            setNewPitfallName("");
-            setNewPitfallDescription("");
-            setShowPitfallForm(true);
+        );
+      }}
+    >
+      {showDefinitionForm ? (
+        <AddItemForm
+          titleLabel="Definition name"
+          bodyLabel="Definition statement (LaTeX allowed)"
+          titleValue={newDefinitionTitle}
+          bodyValue={newDefinitionBody}
+          onTitleChange={setNewDefinitionTitle}
+          onBodyChange={setNewDefinitionBody}
+          onCancel={() => {
+            setShowDefinitionForm(false);
+            setNewDefinitionTitle('');
+            setNewDefinitionBody('');
           }}
-          addDisabled={showPitfallForm}
-          renderItem={(pitfall, index, bulkAction) => {
-          if (editingPitfall?.id === pitfall.id) {
-            return (
-              <AddItemForm
-                titleLabel="Pitfall name"
-                bodyLabel="Pitfall description"
-                titleValue={pitfallEditName}
-                bodyValue={pitfallEditDescription}
-                onTitleChange={setPitfallEditName}
-                onBodyChange={setPitfallEditDescription}
-                onCancel={() => {
-                  setEditingPitfall(null);
-                  setPitfallEditName("");
-                  setPitfallEditDescription("");
-                }}
-                onSubmit={() => {
-                  if (!pitfallEditName.trim() || !pitfallEditDescription.trim()) return;
-                  const id = editingPitfall?.id;
-                  if (!id) return;
-                  setPitfalls((prev) =>
-                    prev.map((item) =>
-                      item.id === id
-                        ? {
-                            ...item,
-                            name: pitfallEditName.trim(),
-                            description: pitfallEditDescription.trim(),
-                          }
-                        : item,
-                    ),
-                  );
-                  setEditingPitfall(null);
-                  setPitfallEditName("");
-                  setPitfallEditDescription("");
-                }}
-                submitLabel="Save Pitfall"
-                canSubmit={Boolean(pitfallEditName.trim() && pitfallEditDescription.trim())}
-              />
-            );
-          }
+          onSubmit={() => {
+            if (!newDefinitionTitle.trim() || !newDefinitionBody.trim()) return;
+            const definition = {
+              id: createId('definition'),
+              title: newDefinitionTitle.trim(),
+              statementTex: newDefinitionBody.trim(),
+              tags: [],
+            };
+            setDefinitions((prev) => [...prev, definition]);
+            setShowDefinitionForm(false);
+            setNewDefinitionTitle('');
+            setNewDefinitionBody('');
+          }}
+          submitLabel="Add Definition"
+          canSubmit={Boolean(newDefinitionTitle.trim() && newDefinitionBody.trim())}
+        />
+      ) : null}
+    </UnitSection>
+  );
+
+  const lemmasSection = (
+    <UnitSection
+      title="Lemmas"
+      items={lemmas}
+      emptyMessage="No lemmas yet."
+      getKey={(lemma) => lemma.id}
+      onAdd={() => {
+        setNewLemmaTitle('');
+        setNewLemmaBody('');
+        setShowLemmaForm(true);
+      }}
+      addDisabled={showLemmaForm}
+      renderItem={(lemma, index, bulkAction) => {
+        if (editingLemma?.id === lemma.id) {
           return (
-            <TextUnit
-              heading={formatUnitHeading("Pitfall", index, pitfall.name)}
-              body={getPitfallBody(pitfall)}
-              bulkAction={bulkAction}
-              renderControls={() => (
-                <ItemControls
-                  editLabel="Edit pitfall"
-                  deleteLabel="Delete pitfall"
-                  onEdit={() => {
-                    setEditingPitfall({ id: pitfall.id });
-                    setPitfallEditName(pitfall.name?.trim() || "");
-                    setPitfallEditDescription(pitfall.description?.trim() || "");
-                  }}
-                  onDelete={() => handleDeletePitfall(pitfall.id)}
-                />
-              )}
+            <AddItemForm
+              titleLabel="Lemma name"
+              bodyLabel="Lemma statement (LaTeX allowed)"
+              titleValue={lemmaEditTitle}
+              bodyValue={lemmaEditBody}
+              onTitleChange={setLemmaEditTitle}
+              onBodyChange={setLemmaEditBody}
+              onCancel={() => {
+                setEditingLemma(null);
+                setLemmaEditTitle('');
+                setLemmaEditBody('');
+              }}
+              onSubmit={() => {
+                if (!lemmaEditTitle.trim() || !lemmaEditBody.trim()) return;
+                const id = editingLemma?.id;
+                if (!id) return;
+                setLemmas((prev) =>
+                  prev.map((item) =>
+                    item.id === id
+                      ? {
+                          ...item,
+                          title: lemmaEditTitle.trim(),
+                          statementTex: lemmaEditBody.trim(),
+                        }
+                      : item,
+                  ),
+                );
+                setEditingLemma(null);
+                setLemmaEditTitle('');
+                setLemmaEditBody('');
+              }}
+              submitLabel="Save Lemma"
+              canSubmit={Boolean(lemmaEditTitle.trim() && lemmaEditBody.trim())}
             />
           );
-        }}
-      >
-        {showPitfallForm ? (
-          <AddItemForm
-            titleLabel="Pitfall name"
-            bodyLabel="Pitfall description"
-            titleValue={newPitfallName}
-            bodyValue={newPitfallDescription}
-            onTitleChange={setNewPitfallName}
-            onBodyChange={setNewPitfallDescription}
-            onCancel={() => {
-              setShowPitfallForm(false);
-              setNewPitfallName("");
-              setNewPitfallDescription("");
-            }}
-            onSubmit={() => {
-              if (!newPitfallName.trim() || !newPitfallDescription.trim()) return;
-              const pitfall = {
-                id: createId("pitfall"),
-                name: newPitfallName.trim(),
-                description: newPitfallDescription.trim(),
-              };
-              setPitfalls((prev) => [...prev, pitfall]);
-              setShowPitfallForm(false);
-              setNewPitfallName("");
-              setNewPitfallDescription("");
-            }}
-            canSubmit={Boolean(newPitfallName.trim() && newPitfallDescription.trim())}
-            submitLabel="Add Pitfall"
+        }
+        const isSelected = selectedLemmaId === lemma.id;
+        const isProofEditing = proofEditLemmaId === lemma.id;
+        const proofText = lemma.proof?.trim() || '';
+        const isProofOpen = Boolean(openProofLemmaIds[lemma.id]);
+
+        const commitProofEdit = () => {
+          const trimmed = proofDraft.trim();
+          if (trimmed === proofText) {
+            setProofEditLemmaId(null);
+            setProofDraft('');
+            return;
+          }
+          handleSaveProof(lemma.id, trimmed);
+        };
+
+        return (
+          <div onMouseDown={() => setSelectedLemmaId(lemma.id)} onClick={() => setSelectedLemmaId(lemma.id)} className="cursor-pointer">
+            <TextUnit
+              className={`rounded border border-transparent bg-slate-900/30 pl-3 pr-0 py-3 transition-colors ${
+                isSelected ? 'border-sky-500/60 bg-slate-900/60' : ''
+              }`}
+              heading={formatUnitHeading('Lemma', index, lemma.title)}
+              body={getLemmaBody(lemma)}
+              bulkAction={bulkAction}
+              renderControls={() => (
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    className={TERTIARY_BUTTON_CLASS}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedLemmaId(lemma.id);
+                      setOpenProofLemmaIds((prev) => {
+                        const next = { ...prev };
+                        if (next[lemma.id]) {
+                          delete next[lemma.id];
+                        } else {
+                          next[lemma.id] = true;
+                        }
+                        return next;
+                      });
+                      setProofEditLemmaId((current) => (current === lemma.id ? null : current));
+                      setProofDraft('');
+                    }}
+                  >
+                    proof
+                  </button>
+                  <ItemControls
+                    editLabel="Edit lemma"
+                    deleteLabel="Delete lemma"
+                    onEdit={() => {
+                      setSelectedLemmaId(lemma.id);
+                      setProofEditLemmaId(null);
+                      setProofDraft('');
+                      setEditingLemma({ id: lemma.id });
+                      setLemmaEditTitle(lemma.title?.trim() || '');
+                      setLemmaEditBody(lemma.statementTex?.trim() || '');
+                    }}
+                    onDelete={() => handleDeleteLemma(lemma.id)}
+                  />
+                </div>
+              )}
+            />
+            {isProofOpen ? (
+              <div className="mt-3 space-y-3 rounded border border-slate-800 bg-slate-950/80 p-3" onClick={(event) => event.stopPropagation()}>
+                {isProofEditing ? (
+                  <textarea
+                    className={`${TEXTAREA_CLASS} h-36`}
+                    value={proofDraft}
+                    autoFocus
+                    onChange={(event) => setProofDraft(event.target.value)}
+                    onBlur={commitProofEdit}
+                    onKeyDown={(event) => {
+                      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+                        event.preventDefault();
+                        commitProofEdit();
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        setProofEditLemmaId(null);
+                        setProofDraft('');
+                      }
+                    }}
+                    placeholder="\\begin{proof} ..."
+                  />
+                ) : proofText ? (
+                  <div className="prose prose-invert max-h-64 overflow-auto text-sm leading-relaxed">
+                    {renderChatContent(proofText)}
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-400">No proof yet. Click the pen to add one.</p>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    className="inline-flex h-8 w-8 items-center justify-center text-lg text-slate-300 transition hover:text-sky-200 focus:outline-none disabled:opacity-50"
+                    aria-label="Edit proof"
+                    title="Edit proof"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (isProofEditing) return;
+                      setSelectedLemmaId(lemma.id);
+                      setProofEditLemmaId(lemma.id);
+                      setProofDraft(proofText);
+                    }}
+                    disabled={isProofEditing}
+                  >
+                    <svg
+                      aria-hidden
+                      className="h-5 w-5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12.361 6.433l3.205 3.205M5 19l3.586-.896a2 2 0 00.964-.536l8.95-8.95a1.5 1.5 0 000-2.121l-2.48-2.48a1.5 1.5 0 00-2.12 0l-8.95 8.95a2 2 0 00-.536.964L5 19z"
+                      />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        );
+      }}
+    >
+      {showLemmaForm ? (
+        <AddItemForm
+          titleLabel="Lemma name"
+          bodyLabel="Lemma statement (LaTeX allowed)"
+          titleValue={newLemmaTitle}
+          bodyValue={newLemmaBody}
+          onTitleChange={setNewLemmaTitle}
+          onBodyChange={setNewLemmaBody}
+          onCancel={() => {
+            setShowLemmaForm(false);
+            setNewLemmaTitle('');
+            setNewLemmaBody('');
+          }}
+          onSubmit={() => {
+            if (!newLemmaTitle.trim() || !newLemmaBody.trim()) return;
+            const lemma = {
+              id: createId('lemma'),
+              title: newLemmaTitle.trim(),
+              statementTex: newLemmaBody.trim(),
+              status: 'draft' as const,
+              tags: [],
+              dependsOn: [],
+              proof: '',
+            };
+            setLemmas((prev) => [...prev, lemma]);
+            setSelectedLemmaId(lemma.id);
+            setShowLemmaForm(false);
+            setNewLemmaTitle('');
+            setNewLemmaBody('');
+          }}
+          canSubmit={Boolean(newLemmaTitle.trim() && newLemmaBody.trim())}
+          submitLabel="Add Lemma"
+        />
+      ) : null}
+    </UnitSection>
+  );
+
+  const factsSection = (
+    <UnitSection
+      title="Facts"
+      items={facts}
+      emptyMessage="No facts yet."
+      getKey={(fact) => fact.id}
+      onAdd={() => {
+        setNewFactTitle('');
+        setNewFactBody('');
+        setShowFactForm(true);
+      }}
+      addDisabled={showFactForm}
+      renderItem={(fact, index, bulkAction) => {
+        if (editingFact?.id === fact.id) {
+          return (
+            <AddItemForm
+              titleLabel="Fact name"
+              bodyLabel="Fact statement (LaTeX allowed)"
+              titleValue={factEditTitle}
+              bodyValue={factEditBody}
+              onTitleChange={setFactEditTitle}
+              onBodyChange={setFactEditBody}
+              onCancel={() => {
+                setEditingFact(null);
+                setFactEditTitle('');
+                setFactEditBody('');
+              }}
+              onSubmit={() => {
+                if (!factEditTitle.trim() || !factEditBody.trim()) return;
+                const id = editingFact?.id;
+                if (!id) return;
+                setFacts((prev) =>
+                  prev.map((item) =>
+                    item.id === id
+                      ? {
+                          ...item,
+                          title: factEditTitle.trim(),
+                          statementTex: factEditBody.trim(),
+                        }
+                      : item,
+                  ),
+                );
+                setEditingFact(null);
+                setFactEditTitle('');
+                setFactEditBody('');
+              }}
+              submitLabel="Save Fact"
+              canSubmit={Boolean(factEditTitle.trim() && factEditBody.trim())}
+            />
+          );
+        }
+        return (
+          <TextUnit
+            heading={formatUnitHeading('Fact', index, fact.title)}
+            body={getFactBody(fact)}
+            bulkAction={bulkAction}
+            renderControls={() => (
+              <ItemControls
+                editLabel="Edit fact"
+                deleteLabel="Delete fact"
+                onEdit={() => {
+                  setEditingFact({ id: fact.id });
+                  setFactEditTitle(fact.title?.trim() || '');
+                  setFactEditBody(fact.statementTex?.trim() || '');
+                }}
+                onDelete={() => handleDeleteFact(fact.id)}
+              />
+            )}
           />
-        ) : null}
-        </UnitSection>
+        );
+      }}
+    >
+      {showFactForm ? (
+        <AddItemForm
+          titleLabel="Fact name"
+          bodyLabel="Fact statement (LaTeX allowed)"
+          titleValue={newFactTitle}
+          bodyValue={newFactBody}
+          onTitleChange={setNewFactTitle}
+          onBodyChange={setNewFactBody}
+          onCancel={() => {
+            setShowFactForm(false);
+            setNewFactTitle('');
+            setNewFactBody('');
+          }}
+          onSubmit={() => {
+            if (!newFactTitle.trim() || !newFactBody.trim()) return;
+            const fact = {
+              id: createId('fact'),
+              title: newFactTitle.trim(),
+              statementTex: newFactBody.trim(),
+              tags: [],
+              refs: [],
+            };
+            setFacts((prev) => [...prev, fact]);
+            setShowFactForm(false);
+            setNewFactTitle('');
+            setNewFactBody('');
+          }}
+          canSubmit={Boolean(newFactTitle.trim() && newFactBody.trim())}
+          submitLabel="Add Fact"
+        />
+      ) : null}
+    </UnitSection>
+  );
+
+  const conjecturesSection = (
+    <UnitSection
+      title="Conjectures"
+      items={conjectures}
+      emptyMessage="No conjectures yet."
+      getKey={(conjecture) => conjecture.id}
+      onAdd={() => {
+        setNewConjectureTitle('');
+        setNewConjectureBody('');
+        setShowConjectureForm(true);
+      }}
+      addDisabled={showConjectureForm}
+      renderItem={(conjecture, index, bulkAction) => {
+        if (editingConjecture?.id === conjecture.id) {
+          return (
+            <AddItemForm
+              titleLabel="Conjecture name"
+              bodyLabel="Conjecture statement (LaTeX allowed)"
+              titleValue={conjectureEditTitle}
+              bodyValue={conjectureEditBody}
+              onTitleChange={setConjectureEditTitle}
+              onBodyChange={setConjectureEditBody}
+              onCancel={() => {
+                setEditingConjecture(null);
+                setConjectureEditTitle('');
+                setConjectureEditBody('');
+              }}
+              onSubmit={() => {
+                if (!conjectureEditTitle.trim() || !conjectureEditBody.trim()) return;
+                const id = editingConjecture?.id;
+                if (!id) return;
+                setConjectures((prev) =>
+                  prev.map((item) =>
+                    item.id === id
+                      ? {
+                          ...item,
+                          title: conjectureEditTitle.trim(),
+                          statementTex: conjectureEditBody.trim(),
+                        }
+                      : item,
+                  ),
+                );
+                setEditingConjecture(null);
+                setConjectureEditTitle('');
+                setConjectureEditBody('');
+              }}
+              submitLabel="Save Conjecture"
+              canSubmit={Boolean(conjectureEditTitle.trim() && conjectureEditBody.trim())}
+            />
+          );
+        }
+        return (
+          <TextUnit
+            heading={formatUnitHeading('Conjecture', index, conjecture.title)}
+            body={getConjectureBody(conjecture)}
+            bulkAction={bulkAction}
+            renderControls={() => (
+              <ItemControls
+                editLabel="Edit conjecture"
+                deleteLabel="Delete conjecture"
+                onEdit={() => {
+                  setEditingConjecture({ id: conjecture.id });
+                  setConjectureEditTitle(conjecture.title?.trim() || '');
+                  setConjectureEditBody(conjecture.statementTex?.trim() || '');
+                }}
+                onDelete={() => handleDeleteConjecture(conjecture.id)}
+              />
+            )}
+          />
+        );
+      }}
+    >
+      {showConjectureForm ? (
+        <AddItemForm
+          titleLabel="Conjecture name"
+          bodyLabel="Conjecture statement (LaTeX allowed)"
+          titleValue={newConjectureTitle}
+          bodyValue={newConjectureBody}
+          onTitleChange={setNewConjectureTitle}
+          onBodyChange={setNewConjectureBody}
+          onCancel={() => {
+            setShowConjectureForm(false);
+            setNewConjectureTitle('');
+            setNewConjectureBody('');
+          }}
+          onSubmit={() => {
+            if (!newConjectureTitle.trim() || !newConjectureBody.trim()) return;
+            const conjecture = {
+              id: createId('conjecture'),
+              title: newConjectureTitle.trim(),
+              statementTex: newConjectureBody.trim(),
+              evidence: '',
+            };
+            setConjectures((prev) => [...prev, conjecture]);
+            setShowConjectureForm(false);
+            setNewConjectureTitle('');
+            setNewConjectureBody('');
+          }}
+          canSubmit={Boolean(newConjectureTitle.trim() && newConjectureBody.trim())}
+          submitLabel="Add Conjecture"
+        />
+      ) : null}
+    </UnitSection>
+  );
+
+  const ideasSection = (
+    <UnitSection
+      title="Ideas"
+      items={ideas}
+      emptyMessage="No ideas yet."
+      getKey={(idea) => idea.id}
+      onAdd={() => {
+        setNewIdeaName('');
+        setNewIdeaDescription('');
+        setShowIdeaForm(true);
+      }}
+      addDisabled={showIdeaForm}
+      renderItem={(idea, index, bulkAction) => {
+        if (editingIdea?.id === idea.id) {
+          return (
+            <AddItemForm
+              titleLabel="Idea name"
+              bodyLabel="Idea description"
+              titleValue={ideaEditName}
+              bodyValue={ideaEditDescription}
+              onTitleChange={setIdeaEditName}
+              onBodyChange={setIdeaEditDescription}
+              onCancel={() => {
+                setEditingIdea(null);
+                setIdeaEditName('');
+                setIdeaEditDescription('');
+              }}
+              onSubmit={() => {
+                if (!ideaEditName.trim() || !ideaEditDescription.trim()) return;
+                const id = editingIdea?.id;
+                if (!id) return;
+                setIdeas((prev) =>
+                  prev.map((item) =>
+                    item.id === id
+                      ? {
+                          ...item,
+                          name: ideaEditName.trim(),
+                          description: ideaEditDescription.trim(),
+                        }
+                      : item,
+                  ),
+                );
+                setEditingIdea(null);
+                setIdeaEditName('');
+                setIdeaEditDescription('');
+              }}
+              submitLabel="Save Idea"
+              canSubmit={Boolean(ideaEditName.trim() && ideaEditDescription.trim())}
+            />
+          );
+        }
+        return (
+          <TextUnit
+            heading={formatUnitHeading('Idea', index, idea.name)}
+            body={getIdeaBody(idea)}
+            bulkAction={bulkAction}
+            renderControls={() => (
+              <ItemControls
+                editLabel="Edit idea"
+                deleteLabel="Delete idea"
+                onEdit={() => {
+                  setEditingIdea({ id: idea.id });
+                  setIdeaEditName(idea.name?.trim() || '');
+                  setIdeaEditDescription(idea.description?.trim() || '');
+                }}
+                onDelete={() => handleDeleteIdea(idea.id)}
+              />
+            )}
+          />
+        );
+      }}
+    >
+      {showIdeaForm ? (
+        <AddItemForm
+          titleLabel="Idea name"
+          bodyLabel="Idea description"
+          titleValue={newIdeaName}
+          bodyValue={newIdeaDescription}
+          onTitleChange={setNewIdeaName}
+          onBodyChange={setNewIdeaDescription}
+          onCancel={() => {
+            setShowIdeaForm(false);
+            setNewIdeaName('');
+            setNewIdeaDescription('');
+          }}
+          onSubmit={() => {
+            if (!newIdeaName.trim() || !newIdeaDescription.trim()) return;
+            const idea = {
+              id: createId('idea'),
+              name: newIdeaName.trim(),
+              description: newIdeaDescription.trim(),
+              checklist: [],
+              antiPatterns: [],
+            };
+            setIdeas((prev) => [...prev, idea]);
+            setShowIdeaForm(false);
+            setNewIdeaName('');
+            setNewIdeaDescription('');
+          }}
+          canSubmit={Boolean(newIdeaName.trim() && newIdeaDescription.trim())}
+          submitLabel="Add Idea"
+        />
+      ) : null}
+    </UnitSection>
+  );
+
+  const pitfallsSection = (
+    <UnitSection
+      title="Pitfalls"
+      items={pitfalls}
+      emptyMessage="No pitfalls yet."
+      getKey={(pitfall) => pitfall.id}
+      onAdd={() => {
+        setNewPitfallName('');
+        setNewPitfallDescription('');
+        setShowPitfallForm(true);
+      }}
+      addDisabled={showPitfallForm}
+      renderItem={(pitfall, index, bulkAction) => {
+        if (editingPitfall?.id === pitfall.id) {
+          return (
+            <AddItemForm
+              titleLabel="Pitfall name"
+              bodyLabel="Pitfall description"
+              titleValue={pitfallEditName}
+              bodyValue={pitfallEditDescription}
+              onTitleChange={setPitfallEditName}
+              onBodyChange={setPitfallEditDescription}
+              onCancel={() => {
+                setEditingPitfall(null);
+                setPitfallEditName('');
+                setPitfallEditDescription('');
+              }}
+              onSubmit={() => {
+                if (!pitfallEditName.trim() || !pitfallEditDescription.trim()) return;
+                const id = editingPitfall?.id;
+                if (!id) return;
+                setPitfalls((prev) =>
+                  prev.map((item) =>
+                    item.id === id
+                      ? {
+                          ...item,
+                          name: pitfallEditName.trim(),
+                          description: pitfallEditDescription.trim(),
+                        }
+                      : item,
+                  ),
+                );
+                setEditingPitfall(null);
+                setPitfallEditName('');
+                setPitfallEditDescription('');
+              }}
+              submitLabel="Save Pitfall"
+              canSubmit={Boolean(pitfallEditName.trim() && pitfallEditDescription.trim())}
+            />
+          );
+        }
+        return (
+          <TextUnit
+            heading={formatUnitHeading('Pitfall', index, pitfall.name)}
+            body={getPitfallBody(pitfall)}
+            bulkAction={bulkAction}
+            renderControls={() => (
+              <ItemControls
+                editLabel="Edit pitfall"
+                deleteLabel="Delete pitfall"
+                onEdit={() => {
+                  setEditingPitfall({ id: pitfall.id });
+                  setPitfallEditName(pitfall.name?.trim() || '');
+                  setPitfallEditDescription(pitfall.description?.trim() || '');
+                }}
+                onDelete={() => handleDeletePitfall(pitfall.id)}
+              />
+            )}
+          />
+        );
+      }}
+    >
+      {showPitfallForm ? (
+        <AddItemForm
+          titleLabel="Pitfall name"
+          bodyLabel="Pitfall description"
+          titleValue={newPitfallName}
+          bodyValue={newPitfallDescription}
+          onTitleChange={setNewPitfallName}
+          onBodyChange={setNewPitfallDescription}
+          onCancel={() => {
+            setShowPitfallForm(false);
+            setNewPitfallName('');
+            setNewPitfallDescription('');
+          }}
+          onSubmit={() => {
+            if (!newPitfallName.trim() || !newPitfallDescription.trim()) return;
+            const pitfall = {
+              id: createId('pitfall'),
+              name: newPitfallName.trim(),
+              description: newPitfallDescription.trim(),
+            };
+            setPitfalls((prev) => [...prev, pitfall]);
+            setShowPitfallForm(false);
+            setNewPitfallName('');
+            setNewPitfallDescription('');
+          }}
+          canSubmit={Boolean(newPitfallName.trim() && newPitfallDescription.trim())}
+          submitLabel="Add Pitfall"
+        />
+      ) : null}
+    </UnitSection>
+  );
+
+  const leftSectionContent: Record<LeftPanelSection, ReactNode> = {
+    notation: notationSection,
+    definitions: definitionsSection,
+    lemmas: lemmasSection,
+    facts: factsSection,
+    conjectures: conjecturesSection,
+    ideas: ideasSection,
+    pitfalls: pitfallsSection,
+  };
+
+  const leftPane = (
+    <div className="flex h-full min-h-0 overflow-hidden">
+      <nav className="flex h-full w-20 flex-col items-center gap-3 border-r border-slate-800 bg-slate-950/90 py-4">
+        {LEFT_PANEL_SECTIONS.map((section) => {
+          const isActive = section.id === activeLeftSection;
+          return (
+            <button
+              key={section.id}
+              type="button"
+              title={section.label}
+              aria-label={section.label}
+              aria-pressed={isActive}
+              onClick={() => setActiveLeftSection(section.id)}
+              className={`relative flex h-[4.5rem] w-[4.5rem] items-center justify-center rounded-md text-[11px] font-semibold uppercase tracking-[0.35em] transition focus:outline-none focus:ring-2 focus:ring-sky-500/40 ${
+                isActive ? 'bg-sky-500 text-slate-950 shadow-lg' : 'text-slate-400 hover:bg-slate-800/70 hover:text-slate-100'
+              }`}
+            >
+              <span
+                aria-hidden
+                className={`absolute left-0 top-0 h-full w-1 rounded-r ${isActive ? 'bg-sky-300' : 'bg-transparent'}`}
+              />
+              <span>{section.shortLabel}</span>
+            </button>
+          );
+        })}
+      </nav>
+      <div className="flex-1 min-w-0">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden">
+          <div className="flex-1 overflow-y-auto pl-4 pr-0 pb-6 pt-4">
+            <div className="space-y-4">{leftSectionContent[activeLeftSection]}</div>
+          </div>
+        </div>
       </div>
     </div>
   );
 
   const rightPane = (
-    <div className="flex h-full flex-col gap-4 overflow-hidden">
+    <div
+      ref={chatPaneRef}
+      className="flex h-full flex-col gap-4 overflow-hidden focus:outline-none"
+      tabIndex={0}
+      onMouseDown={() => {
+        chatPaneRef.current?.focus({ preventScroll: true });
+      }}
+    >
       <section className={`${PANEL_CLASS} flex flex-1 flex-col overflow-hidden p-0`} aria-label="Assistant terminal">
         <div className="relative border-b border-slate-800 bg-slate-900 px-2 pt-2 pb-1">
           <div className="flex items-end gap-1 overflow-x-auto pb-0.5">
@@ -2555,7 +2644,11 @@ export default function ProjectEditor({ projectId }: Props) {
               value={queryText}
               onChange={handleChatInputChange}
               onKeyDown={handleChatKeyDown}
-              placeholder={activeThread ? 'type and press enter' : 'open a thread to chat'}
+              placeholder={
+                activeThread
+                  ? 'Chat here; use # for reference, e.g., #Lemma 1.'
+                  : 'open a thread to chat'
+              }
               rows={1}
               disabled={!activeThread}
             />
@@ -2669,7 +2762,6 @@ export default function ProjectEditor({ projectId }: Props) {
           onClose={() => setShowSettingsModal(false)}
         />
       ) : null}
-      {activeProofLemma ? <ProofModal lemma={activeProofLemma} onClose={() => setActiveProofLemma(null)} /> : null}
       {showRenameModal ? (
         <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
           <div className="w-full max-w-md space-y-5 rounded border border-slate-700 bg-slate-900 p-6 shadow-2xl">
@@ -2765,6 +2857,7 @@ interface ProjectMenuBarProps {
   threads: ChatThread[];
   activeThreadId: string | null;
   openThreadIds: string[];
+  // eslint-disable-next-line no-unused-vars
   onSelectThread: (threadId: string) => void;
 }
 
@@ -3026,54 +3119,6 @@ function LLMSettingsModal(props: LLMSettingsModalProps) {
   );
 }
 
-interface ProofModalProps {
-  lemma: Project['lemmas'][number];
-  onClose: () => void;
-}
-
-function ProofModal({ lemma, onClose }: ProofModalProps) {
-  const [showSource, setShowSource] = useState(false);
-  const proofText = lemma.proof?.trim() || 'Proof not available.';
-
-  return (
-    <div className="app-no-drag fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
-      <div className="w-full max-w-3xl space-y-5 rounded border border-slate-700 bg-slate-900 p-6 shadow-2xl">
-        <header className="space-y-1">
-          <h2 className="text-lg font-semibold text-white">Lemma proof</h2>
-          <p className="text-sm text-slate-300">Review the lemma statement and its associated proof.</p>
-        </header>
-        <TextUnit heading="Lemma" body={getLemmaBody(lemma)} collapsible={false} showHeading className="rounded border border-slate-800 bg-slate-950 px-4 py-3" />
-        <section className="rounded border border-slate-800 bg-slate-950 px-4 py-3">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-base font-semibold italic text-slate-200">Proof</h3>
-            <button
-              type="button"
-              className="rounded border border-slate-600 px-3 py-1 text-xs font-semibold uppercase tracking-[0.15em] text-slate-200 transition hover:border-sky-400 hover:text-sky-200"
-              onClick={() => setShowSource((prev) => !prev)}
-            >
-              {showSource ? 'hide source' : 'show source'}
-            </button>
-          </div>
-          {showSource ? (
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-slate-900/80 p-3 font-mono text-sm text-slate-200">
-              {proofText}
-            </pre>
-          ) : (
-            <div className="prose prose-invert max-h-96 overflow-auto text-sm leading-relaxed">
-              {renderChatContent(proofText)}
-            </div>
-          )}
-        </section>
-        <div className="flex justify-end">
-          <button type="button" className={SECONDARY_BUTTON_CLASS} onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 interface ChatMessageBubbleProps {
   message: ChatMessage;
   isSelected: boolean;
@@ -3082,6 +3127,7 @@ interface ChatMessageBubbleProps {
   onSelect: (id: string) => void;
   // eslint-disable-next-line no-unused-vars
   onToggleRaw: (id: string) => void;
+  // eslint-disable-next-line no-unused-vars
   onEditContent?: (id: string, content: string) => void;
 }
 
@@ -3241,7 +3287,6 @@ function UnitSection<T>({
     .reverse();
   const [bulkAction, setBulkAction] = useState({ version: 0, expanded: false });
   const hasItems = orderedItems.length > 0;
-  const bulkButtonLabel = bulkAction.expanded ? 'Collapse all' : 'Expand all';
 
   return (
     <section className="space-y-3 border-b border-slate-800 pb-6 last:border-b-0">
