@@ -1530,13 +1530,36 @@ export default function ProjectEditor({ projectId }: Props) {
       if (primaryPressed && event.shiftKey && (event.key === 'r' || event.key === 'R')) {
         event.preventDefault();
         handleRenameProject();
+        return;
+      }
+      if (
+        primaryPressed &&
+        !event.shiftKey &&
+        (event.key === 'Tab' || event.key === 'Tab'.toLowerCase()) &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        if (!chatThreads.length) return;
+        setOpenThreadIds((prev) => {
+          const ordered = prev.filter((id) => chatThreads.some((thread) => thread.id === id));
+          if (!ordered.length) {
+            const fallback = chatThreads.map((thread) => thread.id);
+            const next = [...fallback.slice(1), fallback[0]];
+            setActiveThreadId(next[0] ?? null);
+            return fallback;
+          }
+          const currentIndex = ordered.findIndex((id) => id === activeThreadId);
+          const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % ordered.length : 0;
+          setActiveThreadId(ordered[nextIndex] ?? null);
+          return ordered;
+        });
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [handleRenameProject]);
+  }, [handleRenameProject, chatThreads, activeThreadId]);
 
   useEffect(() => {
     if (!window.desktopApi?.onAppCloseRequest) {
@@ -2472,7 +2495,7 @@ export default function ProjectEditor({ projectId }: Props) {
             <span className="select-none text-slate-500">&gt;</span>
             <textarea
               ref={chatInputRef}
-              className={`flex-1 resize-none bg-transparent text-[15px] leading-6 text-slate-100 outline-none ${
+              className={`flex-1 resize-none rounded border border-slate-600 bg-slate-900/80 px-3 py-2 text-[15px] leading-6 text-slate-100 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-500/40 ${
                 activeThread ? '' : 'pointer-events-none text-slate-500'
               }`}
               value={queryText}
@@ -3271,13 +3294,14 @@ interface ItemControlsProps {
 
 function ItemControls({ editLabel, deleteLabel, onEdit, onDelete }: ItemControlsProps) {
   const baseButtonClass =
-    'flex h-7 w-7 items-center justify-center border border-slate-700 bg-slate-950 text-slate-200 transition hover:border-sky-400 hover:text-sky-200';
+    'flex h-7 w-7 items-center justify-center text-slate-200 transition hover:text-sky-200 focus:outline-none';
 
   return (
     <div className="flex items-center gap-1">
       <button
         type="button"
         aria-label={deleteLabel}
+        title={deleteLabel}
         className={baseButtonClass}
         onClick={(event) => {
           event.stopPropagation();
@@ -3298,6 +3322,7 @@ function ItemControls({ editLabel, deleteLabel, onEdit, onDelete }: ItemControls
       <button
         type="button"
         aria-label={editLabel}
+        title={editLabel}
         className={baseButtonClass}
         onClick={(event) => {
           event.stopPropagation();
