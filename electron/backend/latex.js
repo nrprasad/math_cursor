@@ -3,6 +3,7 @@ const JSZip = require('jszip');
 const DEFAULT_THEOREM_DEFS = [
   '\\newtheorem{theorem}{Theorem}',
   '\\newtheorem{lemma}{Lemma}',
+  '\\newtheorem{definition}{Definition}',
 ].join('\n');
 
 function renderMainTex(project) {
@@ -29,6 +30,7 @@ function renderMainTex(project) {
     '\\end{abstract}',
     '\\tableofcontents',
     '\\input{notation.tex}',
+    '\\input{definitions.tex}',
     '\\input{facts.tex}',
     '\\input{lemmas.tex}',
     '\\input{conjectures.tex}',
@@ -46,6 +48,20 @@ function renderNotationTex(project) {
   }
   if (lines.length === 1) {
     lines.push('% No notation defined yet.');
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+function renderDefinitionsTex(project) {
+  const lines = ['% Definitions'];
+  for (const definition of project.definitions ?? []) {
+    lines.push(`\\begin{definition}[${definition.title || definition.id || ''}]\\label{definition:${definition.id}}`);
+    lines.push(definition.statementTex || '');
+    lines.push('\\end{definition}');
+  }
+  if (lines.length === 1) {
+    lines.push('% No definitions defined yet.');
   }
   lines.push('');
   return lines.join('\n');
@@ -104,6 +120,7 @@ async function buildLatexBundle(project) {
   const zip = new JSZip();
   zip.file('main.tex', renderMainTex(project));
   zip.file('notation.tex', renderNotationTex(project));
+  zip.file('definitions.tex', renderDefinitionsTex(project));
   zip.file('facts.tex', renderFactsTex(project));
   zip.file('lemmas.tex', renderLemmasTex(project));
   zip.file('conjectures.tex', renderConjecturesTex(project));
